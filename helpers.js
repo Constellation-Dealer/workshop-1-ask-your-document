@@ -3,21 +3,22 @@
 // ═══════════════════════════════════════════════════════════════
 
 const DEALER_GUID = '23f9cad3-175b-4ff9-b0bf-c49c35c7245e';
+const IDMS_URL = 'https://identitymanagementdev.azurewebsites.net';
+const GATEWAY_URL = 'https://targetmcp-gateway.azurewebsites.net';
+const UMH_URL = 'https://app-targetumh-dev.azurewebsites.net';
+
+let _authToken = null;
 
 function isLiveMode() {
   return document.getElementById('modeToggle').checked;
 }
 
-function getBaseUrl() {
-  return document.getElementById('baseUrl').value.replace(/\/+$/, '');
-}
-
 function getToken() {
-  return document.getElementById('bearerToken').value.trim();
+  return _authToken;
 }
 
 function getDealerGuid() {
-  return document.getElementById('dealerGuid').value.trim() || DEALER_GUID;
+  return DEALER_GUID;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -42,56 +43,14 @@ const MOCK = {
     { id: 'a1b2c3d4-5678-9abc-def0-123456789abc', ingestionStatus: 'Completed', hasEmbedding: true }
   ],
 
-  vectorSearch: {
-    jsonrpc: '2.0',
-    id: 1,
-    result: {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            results: [
-              { mediaFileId: 'a1b2c3d4-5678-9abc-def0-123456789abc', chunkIndex: 2, pageNumber: 12, score: 0.92, preview: 'WARNING: Do not operate this equipment in enclosed or poorly ventilated spaces...' },
-              { mediaFileId: 'a1b2c3d4-5678-9abc-def0-123456789abc', chunkIndex: 5, pageNumber: 15, score: 0.87, preview: 'CAUTION: Always wear protective equipment including safety goggles and gloves when...' },
-              { mediaFileId: 'a1b2c3d4-5678-9abc-def0-123456789abc', chunkIndex: 8, pageNumber: 22, score: 0.83, preview: 'DANGER: Disconnect the battery and wait 5 minutes before servicing any electrical...' }
-            ],
-            totalMatches: 3
-          })
-        }
-      ]
-    }
-  },
-
-  getChunks: {
-    jsonrpc: '2.0',
-    id: 2,
-    result: {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            chunks: [
-              {
-                chunkIndex: 2,
-                pageNumber: 12,
-                text: 'SAFETY WARNING #1 — VENTILATION\n\nDo not operate this equipment in enclosed or poorly ventilated spaces. Carbon monoxide from engine exhaust is odorless and can cause serious injury or death. Ensure adequate airflow of at least 500 CFM when operating indoors. Install carbon monoxide detectors in all enclosed workspaces where this equipment is used.'
-              },
-              {
-                chunkIndex: 5,
-                pageNumber: 15,
-                text: 'SAFETY WARNING #2 — PROTECTIVE EQUIPMENT\n\nAlways wear protective equipment including safety goggles, heat-resistant gloves, and steel-toed boots when operating or servicing this equipment. Hearing protection is required when noise levels exceed 85 dB. Loose clothing must be secured before approaching moving parts.'
-              },
-              {
-                chunkIndex: 8,
-                pageNumber: 22,
-                text: 'SAFETY WARNING #3 — ELECTRICAL HAZARD\n\nDisconnect the battery and wait a minimum of 5 minutes before servicing any electrical components. Capacitors may retain charge after power is disconnected. Use an insulated voltage tester to verify zero energy state. Only qualified technicians should perform electrical repairs.'
-              }
-            ]
-          })
-        }
-      ]
-    }
-  }
+  // Mock answer text (same safety warnings as before)
+  gatewayAnswer: `<p>Based on the document, I found the following safety warnings:</p>
+<p><span class="page-ref">Page 12</span> <strong>SAFETY WARNING #1 — VENTILATION</strong><br>
+Do not operate this equipment in enclosed or poorly ventilated spaces. Carbon monoxide from engine exhaust is odorless and can cause serious injury or death. Ensure adequate airflow of at least 500 CFM when operating indoors. Install carbon monoxide detectors in all enclosed workspaces where this equipment is used.</p>
+<p><span class="page-ref">Page 15</span> <strong>SAFETY WARNING #2 — PROTECTIVE EQUIPMENT</strong><br>
+Always wear protective equipment including safety goggles, heat-resistant gloves, and steel-toed boots when operating or servicing this equipment. Hearing protection is required when noise levels exceed 85 dB. Loose clothing must be secured before approaching moving parts.</p>
+<p><span class="page-ref">Page 22</span> <strong>SAFETY WARNING #3 — ELECTRICAL HAZARD</strong><br>
+Disconnect the battery and wait a minimum of 5 minutes before servicing any electrical components. Capacitors may retain charge after power is disconnected. Use an insulated voltage tester to verify zero energy state. Only qualified technicians should perform electrical repairs.</p>`
 };
 
 let mockPollIndex = 0;
@@ -99,6 +58,49 @@ let mockPollIndex = 0;
 // ═══════════════════════════════════════════════════════════════
 //  HELPER FUNCTIONS — These are provided for you. Do NOT modify.
 // ═══════════════════════════════════════════════════════════════
+
+/**
+ * Authenticate with IDMS to get a bearer token.
+ * Reads credentials from the Live Mode config panel.
+ * Returns the JWT token string.
+ */
+async function authenticate() {
+  if (!isLiveMode()) {
+    _authToken = 'mock-token';
+    return _authToken;
+  }
+
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value.trim();
+  const clientSecret = document.getElementById('clientSecret').value.trim();
+
+  if (!username || !password || !clientSecret) {
+    throw new Error('Please fill in Username, Password, and Client Secret in the Live Mode config panel.');
+  }
+
+  const res = await fetch(`${IDMS_URL}/api/v1/Account/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ClientId: 'TargetDMS',
+      ClientSecret: clientSecret,
+      UserName: username,
+      Password: password,
+      ProductId: 'B3AD4A3C-71B1-43C4-3EF5-08DE4D806118',
+      DmsDealerId: 199111001,
+      LoginResolutionPolicy: 'DealerId'
+    })
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Authentication failed: ${res.status} ${res.statusText}${text ? ' — ' + text : ''}`);
+  }
+
+  const data = await res.json();
+  _authToken = data.token;
+  return _authToken;
+}
 
 /**
  * Upload a PDF file. Returns { id, ingestionStatus, ... }
@@ -115,7 +117,7 @@ async function uploadPdf(file) {
   formData.append('generateEmbedding', 'true');
   formData.append('description', 'Uploaded for RAG exercise');
 
-  const res = await fetch(`${getBaseUrl()}/api/v1/${getDealerGuid()}/media/upload`, {
+  const res = await fetch(`${UMH_URL}/api/v1/${getDealerGuid()}/media/upload`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${getToken()}` },
     body: formData
@@ -136,7 +138,7 @@ async function getMediaStatus(mediaFileId) {
     return { ...response };
   }
 
-  const res = await fetch(`${getBaseUrl()}/api/v1/${getDealerGuid()}/media/${mediaFileId}`, {
+  const res = await fetch(`${UMH_URL}/api/v1/${getDealerGuid()}/media/${mediaFileId}`, {
     headers: { 'Authorization': `Bearer ${getToken()}` }
   });
 
@@ -145,47 +147,123 @@ async function getMediaStatus(mediaFileId) {
 }
 
 /**
- * Call an MCP tool via JSON-RPC. Returns the tool result.
+ * Chat with the Gateway using SSE streaming.
  *
- * @param {string} toolName - e.g. "vector_search_media" or "get_document_chunks"
- * @param {object} args     - the arguments object for the tool
- * @returns {object} parsed result from the MCP response
+ * Sends a message to the Gateway's streaming Chat API and processes
+ * server-sent events in real time. Tool calls made by the LLM agent
+ * are reported via callbacks so you can render them in the loop trace.
+ *
+ * @param {string} message       - The user's question/message
+ * @param {function} onToolStart    - Called with (toolName, description) when a tool starts
+ * @param {function} onToolComplete - Called with (toolName, success, summary) when a tool finishes
+ * @param {function} onThinking     - Called with (message) when the LLM is thinking
+ * @returns {Promise<{message: string, toolCalls: Array}>} The final answer and tool call log
  */
-async function callTool(toolName, args) {
+async function chatWithGateway(message, onToolStart, onToolComplete, onThinking) {
   if (!isLiveMode()) {
-    await sleep(600);
-    if (toolName === 'vector_search_media') {
-      return JSON.parse(MOCK.vectorSearch.result.content[0].text);
-    }
-    if (toolName === 'get_document_chunks') {
-      return JSON.parse(MOCK.getChunks.result.content[0].text);
-    }
-    throw new Error(`Unknown mock tool: ${toolName}`);
+    return _mockChatStream(onToolStart, onToolComplete, onThinking);
   }
 
-  const body = {
-    jsonrpc: '2.0',
-    id: Date.now(),
-    method: 'tools/call',
-    params: {
-      name: toolName,
-      arguments: { dealerGuid: getDealerGuid(), ...args }
-    }
-  };
-
-  const res = await fetch(`${getBaseUrl()}/mcp`, {
+  const res = await fetch(`${GATEWAY_URL}/api/chat/stream`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${getToken()}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(body)
+    body: JSON.stringify({ message })
   });
 
-  if (!res.ok) throw new Error(`MCP call failed: ${res.status} ${res.statusText}`);
-  const json = await res.json();
-  if (json.error) throw new Error(`MCP error: ${json.error.message}`);
-  return JSON.parse(json.result.content[0].text);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Gateway chat failed: ${res.status} ${res.statusText}${text ? ' — ' + text : ''}`);
+  }
+
+  return _parseSseStream(res.body, onToolStart, onToolComplete, onThinking);
+}
+
+/**
+ * Parse an SSE stream from the Gateway.
+ * Events: tool_start, tool_complete, thinking, message, complete
+ */
+async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalMessage = '';
+  const toolCalls = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop(); // keep incomplete line in buffer
+
+    let eventType = null;
+    for (const line of lines) {
+      if (line.startsWith('event: ')) {
+        eventType = line.slice(7).trim();
+      } else if (line.startsWith('data: ') && eventType) {
+        const dataStr = line.slice(6);
+        let data;
+        try { data = JSON.parse(dataStr); } catch { data = dataStr; }
+
+        switch (eventType) {
+          case 'tool_start':
+            if (onToolStart) onToolStart(data.toolName || data.name, data.description || '');
+            toolCalls.push({ name: data.toolName || data.name, status: 'started' });
+            break;
+          case 'tool_complete':
+            if (onToolComplete) onToolComplete(data.toolName || data.name, data.success !== false, data.summary || '');
+            break;
+          case 'thinking':
+            if (onThinking) onThinking(data.message || data);
+            break;
+          case 'message':
+            finalMessage += (typeof data === 'string' ? data : data.content || data.message || '');
+            break;
+          case 'complete':
+            finalMessage = (typeof data === 'string' ? data : data.message || data.content || finalMessage);
+            break;
+        }
+        eventType = null;
+      } else if (line === '' || line.startsWith(':')) {
+        // empty line (event boundary) or comment — ignore
+      }
+    }
+  }
+
+  return { message: finalMessage, toolCalls };
+}
+
+/**
+ * Mock SSE stream with realistic delays for offline development.
+ */
+async function _mockChatStream(onToolStart, onToolComplete, onThinking) {
+  await sleep(500);
+  if (onToolStart) onToolStart('vector_search_media', 'Searching for relevant document chunks...');
+
+  await sleep(1000);
+  if (onToolComplete) onToolComplete('vector_search_media', true, 'Found 3 matching chunks from pages 12, 15, 22');
+
+  await sleep(500);
+  if (onToolStart) onToolStart('get_document_chunks', 'Retrieving full text from matched pages...');
+
+  await sleep(500);
+  if (onToolComplete) onToolComplete('get_document_chunks', true, 'Retrieved 3 chunks');
+
+  await sleep(500);
+  if (onThinking) onThinking('Composing answer from retrieved chunks...');
+
+  await sleep(500);
+  return {
+    message: MOCK.gatewayAnswer,
+    toolCalls: [
+      { name: 'vector_search_media', status: 'complete' },
+      { name: 'get_document_chunks', status: 'complete' }
+    ]
+  };
 }
 
 /**
@@ -298,11 +376,6 @@ async function handleRun() {
   const file = selectedFile || (!isLiveMode() ? getMockFile() : null);
   if (!file) { alert('Please select a PDF file.'); return; }
 
-  if (isLiveMode()) {
-    if (!getBaseUrl()) { alert('Please enter the API Base URL in the Live Mode config panel.'); return; }
-    if (!getToken()) { alert('Please paste your Bearer token in the Live Mode config panel.'); return; }
-  }
-
   const btn = document.getElementById('runBtn');
   btn.disabled = true;
   btn.textContent = 'Running...';
@@ -312,6 +385,8 @@ async function handleRun() {
   mockPollIndex = 0;
 
   try {
+    // Authenticate first (in live mode, gets a real IDMS token)
+    await authenticate();
     await runAgenticLoop(file, question);
   } catch (err) {
     const banner = document.getElementById('errorBanner');

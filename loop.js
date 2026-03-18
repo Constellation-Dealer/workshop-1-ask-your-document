@@ -4,13 +4,14 @@
 //
 //  This is the ONLY file you need to edit.
 //
-//  Your job: implement Steps 2–5 below using the helper functions
+//  Your job: implement Steps 2–4 below using the helper functions
 //  defined in helpers.js. Step 1 is done for you as an example.
 //
 //  Available helpers (see helpers.js for full docs):
 //    uploadPdf(file)          → { id, ingestionStatus, ... }
 //    getMediaStatus(id)       → { ingestionStatus, ... }
-//    callTool(name, args)     → tool result object
+//    chatWithGateway(message, onToolStart, onToolComplete, onThinking)
+//                             → { message, toolCalls }
 //    addStep(id, title, detail, status)   → adds a card to the trace
 //    updateStep(id, detail, status)       → updates an existing card
 //    showAnswer(html)         → displays the answer section
@@ -52,69 +53,49 @@ async function runAgenticLoop(file, question) {
   //
 
 
-  // ── Step 3: Semantic search ───────────────────────────────
+  // ── Step 3: Ask the Gateway ────────────────────────────────
   //
   // TODO: YOUR CODE HERE
   //
-  // 1. Call addStep('search', 'Semantic Search', 'Searching for relevant chunks...', 'thinking')
+  // Instead of calling vector_search_media and get_document_chunks
+  // separately, you send ONE message to the Gateway. The LLM agent
+  // inside the Gateway calls the tools automatically — you just
+  // watch the agentic loop happen in real time via SSE callbacks.
   //
-  // 2. Call: const searchResult = await callTool('vector_search_media', {
-  //      query: question,
-  //      fileType: 'pdfs',
-  //      useChunks: true,
-  //      topK: 5
-  //    })
+  // 1. Call addStep('gateway', 'Ask Gateway', 'Sending question to the LLM agent...', 'thinking')
   //
-  // 3. The result has a `results` array. Each item has: chunkIndex, pageNumber, score, preview
-  //    Update the step:
-  //    updateStep('search',
-  //      `Found ${searchResult.results.length} chunks: pages ${searchResult.results.map(r => r.pageNumber).join(', ')}`,
-  //      'complete')
+  // 2. Call chatWithGateway with your question and three callbacks:
+  //
+  //    const response = await chatWithGateway(
+  //      `Based on the uploaded document (file ID: ${upload.id}), ${question}`,
+  //      (toolName, desc) => addStep(`tool-${toolName}`, toolName, desc, 'thinking'),
+  //      (toolName, success, summary) => updateStep(`tool-${toolName}`, summary, success ? 'complete' : 'error'),
+  //      (msg) => addStep('thinking', 'Thinking', msg, 'thinking')
+  //    );
+  //
+  // 3. After the call completes:
+  //    updateStep('gateway', 'Agent finished!', 'complete')
   //
 
 
-  // ── Step 4: Retrieve the full chunk text ──────────────────
+  // ── Step 4: Show the answer ────────────────────────────────
   //
   // TODO: YOUR CODE HERE
   //
-  // 1. Call addStep('chunks', 'Retrieve Chunks', 'Fetching full text from matched pages...', 'thinking')
+  // 1. Call addStep('answer', 'Compose Answer', 'Rendering the response...', 'thinking')
   //
-  // 2. Extract chunk indexes from step 3's results:
-  //    const chunkIndexes = searchResult.results.map(r => r.chunkIndex)
+  // 2. The response object from Step 3 has a `message` property
+  //    containing the LLM's composed answer (already HTML-formatted).
+  //    Call: showAnswer(response.message)
   //
-  // 3. Call: const chunkResult = await callTool('get_document_chunks', {
-  //      mediaFileId: upload.id,
-  //      chunkIndexes: chunkIndexes
-  //    })
-  //
-  // 4. Update the step:
-  //    updateStep('chunks', `Retrieved ${chunkResult.chunks.length} chunks`, 'complete')
-  //
-
-
-  // ── Step 5: Compose the answer ────────────────────────────
-  //
-  // TODO: YOUR CODE HERE
-  //
-  // 1. Call addStep('answer', 'Compose Answer', 'Formatting answer with page citations...', 'thinking')
-  //
-  // 2. Build an HTML string from the chunks. Each chunk has: pageNumber, text
-  //    For example:
-  //    let answerHtml = '<p>Based on the document:</p>';
-  //    for (const chunk of chunkResult.chunks) {
-  //      answerHtml += `<p><span class="page-ref">Page ${chunk.pageNumber}</span> ${chunk.text}</p>`;
-  //    }
-  //
-  // 3. Call: showAnswer(answerHtml)
-  //
-  // 4. Update the step:
+  // 3. Update the step:
   //    updateStep('answer', 'Done!', 'complete')
   //
 
   // ── If you haven't written any code yet, this message will appear ──
-  // (Remove this check once you implement Steps 2-5 above)
+  // (Remove this check once you implement Steps 2-4 above)
   if (!document.getElementById('step-poll')) {
-    addStep('todo', 'Not Implemented Yet', 'Steps 2-5 need your code! Open loop.js and look for the TODO comments.', 'error');
-    throw new Error('Steps 2-5 are not implemented yet. Open loop.js, find the TODO comments, and write the loop logic.');
+    addStep('todo', 'Not Implemented Yet', 'Steps 2-4 need your code! Open loop.js and look for the TODO comments.', 'error');
+    throw new Error('Steps 2-4 are not implemented yet. Open loop.js, find the TODO comments, and write the loop logic.');
   }
 }
