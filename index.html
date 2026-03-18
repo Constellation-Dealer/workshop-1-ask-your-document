@@ -848,6 +848,12 @@ async function runAgenticLoop(file, question) {
   //    updateStep('answer', 'Done!', 'complete')
   //
 
+  // ── If you haven't written any code yet, this message will appear ──
+  // (Remove this check once you implement Steps 2-5 above)
+  if (!document.getElementById('step-poll')) {
+    addStep('todo', 'Not Implemented Yet', 'Steps 2-5 need your code! Look for the TODO comments in the <script> section of index.html.', 'error');
+    throw new Error('Steps 2-5 are not implemented yet. Open index.html in your editor, find the TODO comments, and write the loop logic.');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -914,9 +920,15 @@ async function handleRun() {
   const file = selectedFile || (!isLiveMode() ? getMockFile() : null);
   if (!file) { alert('Please select a PDF file.'); return; }
 
-  if (isLiveMode() && !getToken()) {
-    alert('Please paste your Bearer token in the Live Mode config panel.');
-    return;
+  if (isLiveMode()) {
+    if (!getBaseUrl()) {
+      alert('Please enter the API Base URL in the Live Mode config panel.');
+      return;
+    }
+    if (!getToken()) {
+      alert('Please paste your Bearer token in the Live Mode config panel.');
+      return;
+    }
   }
 
   // Reset UI
