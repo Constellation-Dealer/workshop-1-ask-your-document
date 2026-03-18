@@ -1,0 +1,216 @@
+/* ═══════════════════════════════════════════════════════════════
+   Ask Your Document — Styles
+   DO NOT MODIFY — focus on loop.js instead
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  --primary: #1a1a2e;
+  --primary-light: #16213e;
+  --accent: #e94560;
+  --accent-hover: #c73e54;
+  --bg: #f8f9fa;
+  --card-bg: #ffffff;
+  --text: #2d3436;
+  --text-light: #636e72;
+  --border: #dfe6e9;
+  --blue: #0984e3;
+  --yellow: #fdcb6e;
+  --green: #00b894;
+  --red: #d63031;
+  --blue-bg: #ebf5fb;
+  --yellow-bg: #fef9e7;
+  --green-bg: #e8f8f5;
+  --red-bg: #fdedee;
+  --rail-line: #b2bec3;
+  --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+/* ── Header ──────────────────────────────────────── */
+header {
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+  color: white;
+  padding: 1.5rem 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 2px 20px rgba(0,0,0,0.15);
+}
+
+header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
+header h1 span { color: var(--accent); }
+
+.mode-toggle { display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem; font-weight: 500; }
+.mode-toggle label { cursor: pointer; user-select: none; }
+
+.switch { position: relative; width: 48px; height: 26px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+
+.slider {
+  position: absolute; inset: 0;
+  background: rgba(255,255,255,0.2);
+  border-radius: 26px; cursor: pointer; transition: 0.3s;
+}
+.slider::before {
+  content: ''; position: absolute;
+  width: 20px; height: 20px; left: 3px; bottom: 3px;
+  background: white; border-radius: 50%; transition: 0.3s;
+}
+.switch input:checked + .slider { background: var(--accent); }
+.switch input:checked + .slider::before { transform: translateX(22px); }
+
+.mode-label { opacity: 0.8; }
+.mode-label.active { opacity: 1; font-weight: 600; }
+
+/* ── Live Mode Config Panel ──────────────────────── */
+.live-config {
+  background: var(--primary); color: white;
+  padding: 0; max-height: 0; overflow: hidden;
+  transition: max-height 0.4s ease, padding 0.4s ease;
+}
+.live-config.visible { max-height: 300px; padding: 1rem 2rem; }
+.live-config .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+.live-config label {
+  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+  opacity: 0.7; display: block; margin-bottom: 0.25rem;
+}
+.live-config input {
+  width: 100%; padding: 0.5rem 0.75rem;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 6px; color: white; font-size: 0.85rem; font-family: var(--font-mono);
+}
+.live-config input::placeholder { color: rgba(255,255,255,0.4); }
+.live-config input:focus { outline: none; border-color: var(--accent); }
+.config-full { grid-column: 1 / -1; }
+
+/* ── Main Container ──────────────────────────────── */
+.container { max-width: 800px; margin: 0 auto; padding: 2rem; }
+
+/* ── Upload Area ─────────────────────────────────── */
+.upload-area {
+  border: 2px dashed var(--border); border-radius: 12px;
+  padding: 2rem; text-align: center; background: var(--card-bg);
+  transition: border-color 0.3s, background 0.3s;
+  cursor: pointer; margin-bottom: 1rem;
+}
+.upload-area:hover, .upload-area.dragover { border-color: var(--accent); background: #fff5f7; }
+.upload-area.has-file { border-color: var(--green); background: var(--green-bg); border-style: solid; }
+.upload-icon { font-size: 2.5rem; margin-bottom: 0.5rem; opacity: 0.4; }
+.upload-area.has-file .upload-icon { opacity: 0.8; }
+.upload-text { font-size: 0.95rem; color: var(--text-light); }
+.upload-text strong { color: var(--text); }
+.file-name { font-family: var(--font-mono); font-size: 0.85rem; color: var(--green); font-weight: 600; margin-top: 0.5rem; }
+#fileInput { display: none; }
+
+/* ── Question Input ──────────────────────────────── */
+.question-row { display: flex; gap: 0.75rem; margin-bottom: 2rem; }
+.question-input {
+  flex: 1; padding: 0.85rem 1.1rem;
+  border: 2px solid var(--border); border-radius: 10px;
+  font-size: 1rem; transition: border-color 0.3s; background: var(--card-bg);
+}
+.question-input:focus { outline: none; border-color: var(--accent); }
+
+.run-btn {
+  padding: 0 2rem; background: var(--accent); color: white;
+  border: none; border-radius: 10px; font-size: 1rem; font-weight: 600;
+  cursor: pointer; transition: background 0.2s, transform 0.1s; white-space: nowrap;
+}
+.run-btn:hover { background: var(--accent-hover); }
+.run-btn:active { transform: scale(0.97); }
+.run-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+/* ── Section Headers ─────────────────────────────── */
+.section-header {
+  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--text-light); font-weight: 700;
+  margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 2px solid var(--border);
+}
+
+/* ── Loop Trace (with progress rail) ─────────────── */
+.loop-trace { position: relative; padding-left: 2.5rem; min-height: 60px; margin-bottom: 2rem; }
+.loop-trace::before {
+  content: ''; position: absolute; left: 11px; top: 0; bottom: 0;
+  width: 2px; background: var(--rail-line);
+}
+.loop-trace:empty::after {
+  content: 'Click "Run" to start the agentic loop';
+  color: var(--text-light); font-style: italic; font-size: 0.9rem;
+  position: absolute; left: 2.5rem; top: 0;
+}
+
+/* ── Step Card ────────────────────────────────────── */
+.step-card {
+  position: relative; background: var(--card-bg);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 1rem 1.25rem; margin-bottom: 0.75rem;
+  animation: slideIn 0.4s ease-out;
+  transition: border-color 0.3s, background 0.3s;
+}
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.step-card::before {
+  content: ''; position: absolute; left: -2.5rem; top: 1.15rem;
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid var(--rail-line); background: var(--bg);
+  z-index: 1; transition: background 0.3s, border-color 0.3s;
+}
+
+/* Status-based styling */
+.step-card.thinking { border-left: 3px solid var(--blue); background: var(--blue-bg); }
+.step-card.thinking::before { background: var(--blue); border-color: var(--blue); animation: pulse 1.2s ease-in-out infinite; }
+.step-card.waiting { border-left: 3px solid var(--yellow); background: var(--yellow-bg); }
+.step-card.waiting::before { background: var(--yellow); border-color: var(--yellow); animation: pulse 1.2s ease-in-out infinite; }
+.step-card.complete { border-left: 3px solid var(--green); background: var(--green-bg); }
+.step-card.complete::before { background: var(--green); border-color: var(--green); }
+.step-card.error { border-left: 3px solid var(--red); background: var(--red-bg); }
+.step-card.error::before { background: var(--red); border-color: var(--red); }
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(9, 132, 227, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(9, 132, 227, 0); }
+}
+
+.step-title { font-weight: 700; font-size: 0.95rem; display: flex; align-items: center; gap: 0.5rem; }
+.step-status-icon { margin-left: auto; font-size: 0.85rem; font-weight: 400; opacity: 0.8; }
+.step-detail { font-family: var(--font-mono); font-size: 0.8rem; color: var(--text-light); margin-top: 0.4rem; line-height: 1.5; white-space: pre-wrap; }
+
+/* ── Answer Section ──────────────────────────────── */
+.answer-section { display: none; margin-top: 1.5rem; }
+.answer-section.visible { display: block; }
+.answer-box {
+  background: var(--card-bg); border: 2px solid var(--green);
+  border-radius: 12px; padding: 1.5rem;
+  animation: slideIn 0.5s ease-out; line-height: 1.7; font-size: 0.95rem;
+}
+.answer-box .page-ref {
+  display: inline-block; background: var(--primary); color: white;
+  font-size: 0.7rem; font-weight: 700; padding: 0.15rem 0.5rem;
+  border-radius: 4px; margin-right: 0.25rem; font-family: var(--font-mono); vertical-align: middle;
+}
+
+/* ── Error Banner ────────────────────────────────── */
+.error-banner {
+  display: none; background: var(--red-bg); border: 1px solid var(--red);
+  border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.5rem;
+  color: var(--red); font-size: 0.9rem;
+}
+.error-banner.visible { display: block; animation: slideIn 0.3s ease-out; }
+
+/* ── Responsive ──────────────────────────────────── */
+@media (max-width: 640px) {
+  .container { padding: 1rem; }
+  .question-row { flex-direction: column; }
+  .run-btn { padding: 0.85rem; }
+  .live-config .config-grid { grid-template-columns: 1fr; }
+}
