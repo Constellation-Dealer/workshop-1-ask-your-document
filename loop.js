@@ -34,45 +34,25 @@ async function runAgenticLoop(file, question) {
   updateStep('poll', 'Embeddings ready!', 'complete');
 
 
-  // ── Step 3: Semantic search ───────────────────────────────
+  // ── Step 3: Ask the Gateway ────────────────────────────────
 
-  addStep('search', 'Semantic Search', 'Searching for relevant chunks...', 'thinking');
+  addStep('gateway', 'Ask Gateway', 'Sending question to the LLM agent...', 'thinking');
 
-  const searchResult = await callTool('vector_search_media', {
-    query: question,
-    fileType: 'pdfs',
-    useChunks: true,
-    topK: 5
-  });
+  const response = await chatWithGateway(
+    `Based on the uploaded document (file ID: ${upload.id}), ${question}`,
+    (toolName, desc) => addStep(`tool-${toolName}`, toolName, desc, 'thinking'),
+    (toolName, success, summary) => updateStep(`tool-${toolName}`, summary, success ? 'complete' : 'error'),
+    (msg) => addStep('thinking', 'Thinking', msg, 'thinking')
+  );
 
-  updateStep('search',
-    `Found ${searchResult.results.length} chunks: pages ${searchResult.results.map(r => r.pageNumber).join(', ')}`,
-    'complete');
+  updateStep('gateway', 'Agent finished!', 'complete');
 
 
-  // ── Step 4: Retrieve the full chunk text ──────────────────
+  // ── Step 4: Show the answer ────────────────────────────────
 
-  addStep('chunks', 'Retrieve Chunks', 'Fetching full text from matched pages...', 'thinking');
+  addStep('answer', 'Compose Answer', 'Rendering the response...', 'thinking');
 
-  const chunkIndexes = searchResult.results.map(r => r.chunkIndex);
+  showAnswer(response.message);
 
-  const chunkResult = await callTool('get_document_chunks', {
-    mediaFileId: upload.id,
-    chunkIndexes: chunkIndexes
-  });
-
-  updateStep('chunks', `Retrieved ${chunkResult.chunks.length} chunks`, 'complete');
-
-
-  // ── Step 5: Compose the answer ────────────────────────────
-
-  addStep('answer', 'Compose Answer', 'Formatting answer with page citations...', 'thinking');
-
-  let answerHtml = `<p>Based on the document, here's what I found for "<em>${question}</em>":</p>`;
-  for (const chunk of chunkResult.chunks) {
-    answerHtml += `<p><span class="page-ref">Page ${chunk.pageNumber}</span> ${chunk.text}</p>`;
-  }
-
-  showAnswer(answerHtml);
   updateStep('answer', 'Done!', 'complete');
 }

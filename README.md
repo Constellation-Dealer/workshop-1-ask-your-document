@@ -1,6 +1,6 @@
-# Ask Your Document — RAG with Agentic Loop
+# Ask Your Document — Gateway Chat with Agentic Loop
 
-A hands-on exercise where you build an agentic loop that uploads a PDF, waits for it to be indexed, and answers questions about it using semantic search.
+A hands-on exercise where you upload a PDF, wait for it to be indexed, and then ask questions about it through the TargetMCP Gateway's streaming Chat API. The Gateway's LLM agent calls the right tools automatically — you watch the agentic loop happen in real time via SSE events.
 
 ## Getting Started
 
@@ -14,7 +14,7 @@ A hands-on exercise where you build an agentic loop that uploads a PDF, waits fo
 ask-your-document/
 ├── index.html      ← Page structure (no need to modify)
 ├── styles.css      ← UI styling (no need to modify)
-├── helpers.js      ← API helpers, mock data, UI wiring (no need to modify)
+├── helpers.js      ← Auth, API helpers, mock data, UI wiring (no need to modify)
 └── loop.js         ← YOUR CODE GOES HERE (the agentic loop)
 ```
 
@@ -22,14 +22,13 @@ ask-your-document/
 
 ## What You Write
 
-Open `loop.js` and look for the `TODO: YOUR CODE HERE` comments. Step 1 (Upload) is done for you as an example. You fill in Steps 2–5 (~20 lines total):
+Open `loop.js` and look for the `TODO: YOUR CODE HERE` comments. Step 1 (Upload) is done for you as an example. You fill in Steps 2-4 (~20 lines total):
 
-1. **Polling loop** — check status, wait, repeat until embeddings are ready
-2. **Semantic search** — call `vector_search_media` with the user's question
-3. **Chunk retrieval** — call `get_document_chunks` with the matched indexes
-4. **Compose answer** — format chunks with page citations
+1. **Polling loop** — check ingestion status, wait, repeat until embeddings are ready
+2. **Ask the Gateway** — send your question to `chatWithGateway()` with SSE callbacks that render each tool call the LLM agent makes
+3. **Show the answer** — display the Gateway's composed response
 
-Each TODO tells you exactly which helper function to call and what arguments to use.
+The key difference from a traditional RAG loop: you do NOT call `vector_search_media` or `get_document_chunks` yourself. The Gateway's LLM agent decides which tools to call and calls them for you. You just watch the SSE events stream in.
 
 ## Mock Mode (default)
 
@@ -37,4 +36,10 @@ All API responses are embedded as mock data in `helpers.js`. No network, no serv
 
 ## Live Mode
 
-Click the **Live** toggle in the header to switch to real API calls against TargetUMH DEV. You'll need to paste a Bearer token from the Champion Portal. Upload a real PDF (up to 10 MB), get real AI-powered vector embeddings, and do real semantic search.
+Click the **Live** toggle in the header to switch to real API calls. You will need credentials from the Champion Portal workshop detail page:
+
+- **Username** — your workshop login
+- **Password** — your workshop password
+- **Client Secret** — the TargetDMS client secret
+
+The app authenticates with IDMS automatically to get a bearer token, uploads your PDF to TargetUMH, and streams the Gateway's chat response in real time.
