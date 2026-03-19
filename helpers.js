@@ -1,15 +1,25 @@
 // ═══════════════════════════════════════════════════════════════
-//  CONFIGURATION
+//  CONFIGURATION — loaded from .env (see .env.example)
+//
+//  TODO: Copy .env.example to .env and fill in ALL values:
+//    - IDMS_URL       → Token endpoint base URL (for authentication)
+//    - GATEWAY_URL    → TargetMCP Gateway (for chat/streaming)
+//    - UMH_URL        → TargetUMH (for upload and media status)
+//    - DEALER_GUID    → Dealer identifier for API calls
+//    - USERNAME       → IDMS username
+//    - PASSWORD       → IDMS password
+//    - CLIENT_SECRET  → IDMS client secret
+//
 // ═══════════════════════════════════════════════════════════════
 
-const DEALER_GUID = '23f9cad3-175b-4ff9-b0bf-c49c35c7245e';
-const IDMS_URL = 'https://identitymanagementdev.azurewebsites.net';
-const GATEWAY_URL = 'https://targetmcp-gateway.azurewebsites.net';
-const UMH_URL = 'https://app-targetumh-dev.azurewebsites.net';
+let DEALER_GUID = '';
+let IDMS_URL = '';
+let GATEWAY_URL = '';
+let UMH_URL = '';
 
 let _authToken = null;
 
-// Credentials loaded from .env file
+// Config loaded from .env file
 let _config = { username: '', password: '', clientSecret: '' };
 
 function getToken() {
@@ -36,6 +46,10 @@ async function loadEnv() {
       if (eq === -1) continue;
       const key = trimmed.slice(0, eq).trim();
       const value = trimmed.slice(eq + 1).trim();
+      if (key === 'IDMS_URL') IDMS_URL = value;
+      if (key === 'GATEWAY_URL') GATEWAY_URL = value;
+      if (key === 'UMH_URL') UMH_URL = value;
+      if (key === 'DEALER_GUID') DEALER_GUID = value;
       if (key === 'USERNAME') _config.username = value;
       if (key === 'PASSWORD') _config.password = value;
       if (key === 'CLIENT_SECRET') _config.clientSecret = value;
@@ -49,8 +63,9 @@ async function loadEnv() {
   if (_config.password) document.getElementById('password').value = _config.password;
   if (_config.clientSecret) document.getElementById('clientSecret').value = _config.clientSecret;
 
-  // Hide the setup hint if all credentials are loaded
-  if (_config.username && _config.password && _config.clientSecret) {
+  // Hide the setup hint if all config is loaded
+  if (IDMS_URL && GATEWAY_URL && UMH_URL && DEALER_GUID &&
+      _config.username && _config.password && _config.clientSecret) {
     document.getElementById('configHint').classList.add('hidden');
   }
 }
@@ -69,8 +84,12 @@ async function authenticate() {
   const password = document.getElementById('password').value.trim();
   const clientSecret = document.getElementById('clientSecret').value.trim();
 
+  if (!IDMS_URL || !GATEWAY_URL || !UMH_URL || !DEALER_GUID) {
+    throw new Error('Missing API config. Copy .env.example to .env and fill in IDMS_URL, GATEWAY_URL, UMH_URL, and DEALER_GUID.');
+  }
+
   if (!username || !password || !clientSecret) {
-    throw new Error('Missing credentials. Fill in .env (see .env.example) or enter them in the config panel above.');
+    throw new Error('Missing credentials. Fill in USERNAME, PASSWORD, and CLIENT_SECRET in .env or in the config panel above.');
   }
 
   const res = await fetch(`${IDMS_URL}/api/v1/Account/token`, {
