@@ -48,6 +48,11 @@ async function loadEnv() {
   if (_config.username) document.getElementById('username').value = _config.username;
   if (_config.password) document.getElementById('password').value = _config.password;
   if (_config.clientSecret) document.getElementById('clientSecret').value = _config.clientSecret;
+
+  // Hide the setup hint if all credentials are loaded
+  if (_config.username && _config.password && _config.clientSecret) {
+    document.getElementById('configHint').classList.add('hidden');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
