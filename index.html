@@ -11,30 +11,25 @@
   <!-- ── Header ──────────────────────────────────────── -->
   <header>
     <h1>Ask Your <span>Document</span></h1>
-    <div class="mode-toggle">
-      <span class="mode-label active" id="mockLabel">Mock</span>
-      <div class="switch">
-        <input type="checkbox" id="modeToggle">
-        <span class="slider"></span>
-      </div>
-      <span class="mode-label" id="liveLabel">Live</span>
-    </div>
   </header>
 
-  <!-- ── Live Mode Config ────────────────────────────── -->
-  <div class="live-config" id="liveConfig">
+  <!-- ── Config Panel (prefilled from .env) ──────────── -->
+  <div class="live-config visible" id="liveConfig">
     <div class="config-grid">
       <div>
         <label for="username">Username</label>
-        <input type="text" id="username" placeholder="From Champion Portal">
+        <!-- ✏️ CONFIGURE: set USERNAME in .env -->
+        <input type="text" id="username" placeholder="Set USERNAME in .env">
       </div>
       <div>
         <label for="password">Password</label>
-        <input type="password" id="password" placeholder="From Champion Portal">
+        <!-- ✏️ CONFIGURE: set PASSWORD in .env -->
+        <input type="password" id="password" placeholder="Set PASSWORD in .env">
       </div>
       <div class="config-full">
         <label for="clientSecret">Client Secret</label>
-        <input type="password" id="clientSecret" placeholder="From Champion Portal">
+        <!-- ✏️ CONFIGURE: set CLIENT_SECRET in .env -->
+        <input type="password" id="clientSecret" placeholder="Set CLIENT_SECRET in .env">
       </div>
     </div>
   </div>
@@ -47,7 +42,7 @@
       <div class="upload-icon">&#128196;</div>
       <div class="upload-text">
         <strong>Choose a PDF</strong> or drag it here
-        <br><span style="font-size:0.8rem">In mock mode, a sample PDF is used automatically</span>
+        <br><span style="font-size:0.8rem">Max 10 MB</span>
       </div>
       <div class="file-name" id="fileName"></div>
     </div>
@@ -80,8 +75,9 @@
     ┌─────────────────────────────────────────────────────────┐
     │  FILE GUIDE                                             │
     │                                                         │
+    │  .env.example — Copy to .env and fill in credentials    │
     │  styles.css   — UI styling (do not modify)              │
-    │  helpers.js   — Auth, API helpers, mock data, UI wiring │
+    │  helpers.js   — Auth, API helpers, UI wiring            │
     │                 (do not modify)                          │
     │  loop.js      — YOUR CODE GOES HERE                     │
     │                 Open this file and fill in the TODOs     │
