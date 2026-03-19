@@ -48,28 +48,6 @@ header {
 header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
 header h1 span { color: var(--accent); }
 
-.mode-toggle { display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem; font-weight: 500; }
-.mode-toggle label { cursor: pointer; user-select: none; }
-
-.switch { position: relative; width: 48px; height: 26px; }
-.switch input { opacity: 0; width: 0; height: 0; }
-
-.slider {
-  position: absolute; inset: 0;
-  background: rgba(255,255,255,0.2);
-  border-radius: 26px; cursor: pointer; transition: 0.3s;
-}
-.slider::before {
-  content: ''; position: absolute;
-  width: 20px; height: 20px; left: 3px; bottom: 3px;
-  background: white; border-radius: 50%; transition: 0.3s;
-}
-.switch input:checked + .slider { background: var(--accent); }
-.switch input:checked + .slider::before { transform: translateX(22px); }
-
-.mode-label { opacity: 0.8; }
-.mode-label.active { opacity: 1; font-weight: 600; }
-
 /* ── Live Mode Config Panel ──────────────────────── */
 .live-config {
   background: var(--primary); color: white;
