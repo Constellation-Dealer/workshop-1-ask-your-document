@@ -4,7 +4,57 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Ask Your Document — Gateway Chat with Agentic Loop</title>
-  <link rel="stylesheet" href="styles.css">
+  <script>
+    (async function loadVersionedAssets() {
+      let version = 'dev';
+
+      try {
+        const res = await fetch('app-version.json', { cache: 'no-store' });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.version) version = data.version;
+        }
+      } catch {
+        // Fall back to unversioned local development behavior.
+      }
+
+      window.__APP_VERSION__ = version;
+
+      const css = document.createElement('link');
+      css.rel = 'stylesheet';
+      css.href = `styles.css?v=${version}`;
+      document.head.appendChild(css);
+
+      function appendScript(src) {
+        return new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = `${src}?v=${version}`;
+          script.async = false;
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+
+      async function loadScripts() {
+        try {
+          await appendScript('helpers.js');
+          await appendScript('loop.js');
+        } catch {
+          // The page will surface script errors in the browser console.
+        }
+      }
+
+      if (document.readyState === 'loading') {
+        window.addEventListener('DOMContentLoaded', async function onReady() {
+          window.removeEventListener('DOMContentLoaded', onReady);
+          await loadScripts();
+        });
+      } else {
+        await loadScripts();
+      }
+    })();
+  </script>
 </head>
 <body>
 
@@ -18,22 +68,8 @@
     <div class="config-hint" id="configHint">
       Copy <code>.env.example</code> to <code>.env</code> and fill in your credentials from the Champion Portal.
     </div>
-    <div class="config-grid">
-      <div>
-        <label for="username">Username</label>
-        <!-- ✏️ CONFIGURE: set USERNAME in .env -->
-        <input type="text" id="username" placeholder="Set USERNAME in .env">
-      </div>
-      <div>
-        <label for="password">Password</label>
-        <!-- ✏️ CONFIGURE: set PASSWORD in .env -->
-        <input type="password" id="password" placeholder="Set PASSWORD in .env">
-      </div>
-      <div class="config-full">
-        <label for="clientSecret">Client Secret</label>
-        <!-- ✏️ CONFIGURE: set CLIENT_SECRET in .env -->
-        <input type="password" id="clientSecret" placeholder="Set CLIENT_SECRET in .env">
-      </div>
+    <div class="config-hint hidden" id="configStatus">
+      Config loaded from <code>.env</code>. The app will use those values automatically.
     </div>
   </div>
 
@@ -87,9 +123,6 @@
     │  index.html   — This file (page structure)              │
     └─────────────────────────────────────────────────────────┘
   -->
-
-  <script src="helpers.js"></script>
-  <script src="loop.js"></script>
 
 </body>
 </html>

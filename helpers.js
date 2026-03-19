@@ -1,6 +1,11 @@
 // ═══════════════════════════════════════════════════════════════
 //  CONFIGURATION — loaded from .env (see .env.example)
 //
+//  CONTRACT
+//  - helpers.js owns config loading, auth, API calls, SSE parsing, and UI primitives
+//  - loop.js owns the workflow and decides when to call these helpers
+//  - addStep/updateStep/showAnswer update the page only; they do not trigger APIs
+//
 //  TODO: Copy .env.example to .env and fill in ALL values:
 //    - IDMS_URL       → Token endpoint base URL (for authentication)
 //    - GATEWAY_URL    → TargetMCP Gateway (for chat/streaming)
@@ -16,8 +21,10 @@ let DEALER_GUID = '';
 let IDMS_URL = '';
 let GATEWAY_URL = '';
 let UMH_URL = '';
+const APP_VERSION = window.__APP_VERSION__ || 'dev';
 
 let _authToken = null;
+let _reloadScheduled = false;
 
 // Config loaded from .env file
 let _config = { username: '', password: '', clientSecret: '' };
@@ -30,13 +37,41 @@ function getDealerGuid() {
   return DEALER_GUID;
 }
 
+function showBanner(message) {
+  const banner = document.getElementById('errorBanner');
+  banner.textContent = message;
+  banner.classList.add('visible');
+}
+
+async function checkForAppUpdate() {
+  if (_reloadScheduled) return true;
+
+  try {
+    const res = await fetch(`app-version.json?v=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) return false;
+
+    const data = await res.json();
+    if (!data?.version || data.version === APP_VERSION) return false;
+
+    _reloadScheduled = true;
+    showBanner('A newer version of this workshop app is available. Reloading so you get the latest Gateway response handling...');
+    setTimeout(() => window.location.reload(), 1200);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  .env LOADER
 // ═══════════════════════════════════════════════════════════════
 
 async function loadEnv() {
+  const configHint = document.getElementById('configHint');
+  const configStatus = document.getElementById('configStatus');
+
   try {
-    const res = await fetch('.env');
+    const res = await fetch(`.env?v=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) throw new Error();
     const text = await res.text();
     for (const line of text.split('\n')) {
@@ -55,18 +90,16 @@ async function loadEnv() {
       if (key === 'CLIENT_SECRET') _config.clientSecret = value;
     }
   } catch {
-    // .env not found — credentials must be entered in the config panel
+    // Keep the setup hint visible when .env is missing or incomplete.
   }
 
-  // Prefill the config panel from .env values
-  if (_config.username) document.getElementById('username').value = _config.username;
-  if (_config.password) document.getElementById('password').value = _config.password;
-  if (_config.clientSecret) document.getElementById('clientSecret').value = _config.clientSecret;
-
-  // Hide the setup hint if all config is loaded
   if (IDMS_URL && GATEWAY_URL && UMH_URL && DEALER_GUID &&
       _config.username && _config.password && _config.clientSecret) {
-    document.getElementById('configHint').classList.add('hidden');
+    configHint.classList.add('hidden');
+    configStatus.classList.remove('hidden');
+  } else {
+    configHint.classList.remove('hidden');
+    configStatus.classList.add('hidden');
   }
 }
 
@@ -76,20 +109,20 @@ async function loadEnv() {
 
 /**
  * Authenticate with IDMS to get a bearer token.
- * Reads credentials from the config panel (prefilled from .env).
+ * Reads credentials from the loaded .env config.
  * Returns the JWT token string.
  */
 async function authenticate() {
-  const username = document.getElementById('username').value.trim();
-  const password = document.getElementById('password').value.trim();
-  const clientSecret = document.getElementById('clientSecret').value.trim();
+  const username = _config.username.trim();
+  const password = _config.password.trim();
+  const clientSecret = _config.clientSecret.trim();
 
   if (!IDMS_URL || !GATEWAY_URL || !UMH_URL || !DEALER_GUID) {
     throw new Error('Missing API config. Copy .env.example to .env and fill in IDMS_URL, GATEWAY_URL, UMH_URL, and DEALER_GUID.');
   }
 
   if (!username || !password || !clientSecret) {
-    throw new Error('Missing credentials. Fill in USERNAME, PASSWORD, and CLIENT_SECRET in .env or in the config panel above.');
+    throw new Error('Missing credentials. Fill in USERNAME, PASSWORD, and CLIENT_SECRET in .env.');
   }
 
   const res = await fetch(`${IDMS_URL}/api/v1/Account/token`, {
@@ -108,11 +141,16 @@ async function authenticate() {
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`Authentication failed: ${res.status} ${res.statusText}${text ? ' — ' + text : ''}`);
+    throw new Error(`Authentication failed while getting an IDMS token. Check USERNAME, PASSWORD, CLIENT_SECRET, and the ChampionWorkshop client setup.${text ? ' Details: ' + text : ''}`);
   }
 
   const data = await res.json();
-  _authToken = data.token;
+  _authToken = data.access_token || data.token;
+
+  if (!_authToken) {
+    throw new Error('Authentication succeeded, but IDMS did not return an access token. The loop cannot continue without a bearer token.');
+  }
+
   return _authToken;
 }
 
@@ -132,7 +170,7 @@ async function uploadPdf(file) {
     body: formData
   });
 
-  if (!res.ok) throw new Error(`Upload failed: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`Upload failed, so the document cannot be indexed for retrieval. Check UMH auth, dealer access, and file size/type. (${res.status} ${res.statusText})`);
   return await res.json();
 }
 
@@ -144,7 +182,7 @@ async function getMediaStatus(mediaFileId) {
     headers: { 'Authorization': `Bearer ${getToken()}` }
   });
 
-  if (!res.ok) throw new Error(`Status check failed: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new Error(`Status check failed, so the app cannot tell whether embeddings are ready. Check UMH availability and token validity. (${res.status} ${res.statusText})`);
   return await res.json();
 }
 
@@ -169,7 +207,7 @@ async function chatWithGateway(message, onToolStart, onToolComplete, onThinking)
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`Gateway chat failed: ${res.status} ${res.statusText}${text ? ' — ' + text : ''}`);
+    throw new Error(`Gateway request failed, so the agent could not plan tool calls or compose an answer.${text ? ' Details: ' + text : ` (${res.status} ${res.statusText})`}`);
   }
 
   return _parseSseStream(res.body, onToolStart, onToolComplete, onThinking);
@@ -184,6 +222,49 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
   let buffer = '';
   let finalMessage = '';
   const toolCalls = [];
+  let eventType = null;
+
+  // Gateway events are not perfectly uniform. Normalize the common
+  // shapes so the teaching app can focus on the loop, not event plumbing.
+  function getEventText(data) {
+    if (typeof data === 'string') return data;
+    if (!data || typeof data !== 'object') return '';
+    return data.message || data.content || data.response?.message || data.response?.content || '';
+  }
+
+  function processLine(line) {
+    if (line.startsWith('event: ')) {
+      eventType = line.slice(7).trim();
+      return;
+    }
+
+    if (!line.startsWith('data: ') || !eventType) return;
+
+    const dataStr = line.slice(6);
+    let data;
+    try { data = JSON.parse(dataStr); } catch { data = dataStr; }
+
+    switch (eventType) {
+      case 'tool_start':
+        if (onToolStart) onToolStart(data.toolName || data.name, data.description || '');
+        toolCalls.push({ name: data.toolName || data.name, status: 'started' });
+        break;
+      case 'tool_complete':
+        if (onToolComplete) onToolComplete(data.toolName || data.name, data.success !== false, data.summary || '');
+        break;
+      case 'thinking':
+        if (onThinking) onThinking(getEventText(data));
+        break;
+      case 'message':
+        finalMessage += getEventText(data);
+        break;
+      case 'complete':
+        finalMessage = getEventText(data) || finalMessage;
+        break;
+    }
+
+    eventType = null;
+  }
 
   while (true) {
     const { done, value } = await reader.read();
@@ -193,36 +274,15 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
     const lines = buffer.split('\n');
     buffer = lines.pop();
 
-    let eventType = null;
     for (const line of lines) {
-      if (line.startsWith('event: ')) {
-        eventType = line.slice(7).trim();
-      } else if (line.startsWith('data: ') && eventType) {
-        const dataStr = line.slice(6);
-        let data;
-        try { data = JSON.parse(dataStr); } catch { data = dataStr; }
-
-        switch (eventType) {
-          case 'tool_start':
-            if (onToolStart) onToolStart(data.toolName || data.name, data.description || '');
-            toolCalls.push({ name: data.toolName || data.name, status: 'started' });
-            break;
-          case 'tool_complete':
-            if (onToolComplete) onToolComplete(data.toolName || data.name, data.success !== false, data.summary || '');
-            break;
-          case 'thinking':
-            if (onThinking) onThinking(data.message || data);
-            break;
-          case 'message':
-            finalMessage += (typeof data === 'string' ? data : data.content || data.message || '');
-            break;
-          case 'complete':
-            finalMessage = (typeof data === 'string' ? data : data.message || data.content || finalMessage);
-            break;
-        }
-        eventType = null;
-      }
+      processLine(line);
     }
+  }
+
+  // Some Gateway responses end immediately after the final data line.
+  // Flush any remaining partial event so the answer still renders.
+  if (buffer.trim()) {
+    processLine(buffer.trim());
   }
 
   return { message: finalMessage, toolCalls };
@@ -270,7 +330,7 @@ function updateStep(id, detail, status) {
 function showAnswer(html) {
   const section = document.getElementById('answerSection');
   const box = document.getElementById('answerBox');
-  box.innerHTML = html;
+  box.innerHTML = html || '<em>No final answer was returned by the Gateway.</em>';
   section.classList.add('visible');
   section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
@@ -318,6 +378,8 @@ async function handleRun() {
   const question = document.getElementById('questionInput').value.trim();
   if (!question) { alert('Please enter a question.'); return; }
   if (!selectedFile) { alert('Please select a PDF file.'); return; }
+
+  if (await checkForAppUpdate()) return;
 
   const btn = document.getElementById('runBtn');
   btn.disabled = true;
