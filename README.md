@@ -11,6 +11,8 @@ A hands-on exercise where you upload a PDF, wait for it to be indexed, and then 
 5. Open `http://localhost:5173`
 6. Click **Run** to see Step 1 execute (and a prompt to implement the rest)
 
+> **Do NOT open `index.html` directly as a file** (`file://...`). The APIs will reject requests that don't come from `http://localhost:5173`.
+
 ## File Structure
 
 ```
