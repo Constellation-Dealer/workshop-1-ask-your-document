@@ -3,7 +3,36 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ask Your Document — Gateway Chat with Agentic Loop</title>
+  <title>Ask Your Document — Workshop 01</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;600&display=swap">
+
+  <!-- Critical ground colour so the page never flashes white before styles.css lands. -->
+  <style>
+    html { background: #EDF1F4; color-scheme: light dark; }
+    html[data-theme="dark"] { background: #0E1A22; }
+    @media (prefers-color-scheme: dark) {
+      html:not([data-theme="light"]) { background: #0E1A22; }
+    }
+  </style>
+
+  <script>
+    // Apply the saved theme before first paint.
+    (function applyTheme() {
+      try {
+        const saved = localStorage.getItem('workshop-theme');
+        if (saved === 'dark' || saved === 'light') {
+          document.documentElement.setAttribute('data-theme', saved);
+        }
+      } catch {
+        // Private browsing or blocked storage: fall back to the system scheme.
+      }
+    })();
+  </script>
+
   <script>
     (async function loadVersionedAssets() {
       let version = 'dev';
@@ -59,56 +88,139 @@
 <body>
 
   <!-- ── Header ──────────────────────────────────────── -->
-  <header>
-    <h1>Ask Your <span>Document</span></h1>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="masthead-text">
+        <p class="eyebrow">Workshop 01 · Ask your document</p>
+        <h1>Answer a question from your own PDF</h1>
+        <p class="lede">
+          Upload a document, wait for it to be indexed, then hand the question to the Gateway.
+          Its agent picks the tools it needs — every call shows up in the trace as it happens.
+        </p>
+      </div>
+      <div class="masthead-controls">
+        <span class="env-chip" id="envChip" title="Environment these calls go to">ENV</span>
+        <button type="button" class="theme-toggle" id="themeToggle"
+          aria-label="Switch colour scheme" title="Switch colour scheme">
+          <span aria-hidden="true">◐</span>
+        </button>
+      </div>
+    </div>
   </header>
 
-  <!-- ── Config Panel (prefilled from .env) ──────────── -->
-  <div class="live-config visible" id="liveConfig">
-    <div class="config-hint" id="configHint">
-      Copy <code>.env.example</code> to <code>.env</code> and fill in your credentials from the Champion Portal.
-    </div>
-    <div class="config-hint hidden" id="configStatus">
-      Config loaded from <code>.env</code>. The app will use those values automatically.
-    </div>
-  </div>
+  <main class="shell">
 
-  <!-- ── Main Content ────────────────────────────────── -->
-  <div class="container">
+    <!-- ── Input column ──────────────────────────────── -->
+    <section class="col-input" aria-labelledby="inputHeading">
+      <div class="input-sticky">
+        <h2 class="eyebrow section-eyebrow" id="inputHeading">Input</h2>
 
-    <!-- Upload Area -->
-    <div class="upload-area" id="uploadArea">
-      <div class="upload-icon">&#128196;</div>
-      <div class="upload-text">
-        <strong>Choose a PDF</strong> or drag it here
-        <br><span style="font-size:0.8rem">Max 10 MB</span>
+        <!-- Document -->
+        <div class="field">
+          <label class="field-label" for="fileInput">Document</label>
+          <div class="upload-area" id="uploadArea" role="button" tabindex="0"
+            aria-describedby="uploadHint">
+            <div class="upload-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+                stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path>
+                <path d="M14 3v5h5"></path>
+              </svg>
+            </div>
+            <div class="upload-text">
+              <strong>Choose a PDF</strong> or drop one here
+              <span class="upload-hint" id="uploadHint">PDF only · up to 10 MB</span>
+            </div>
+            <div class="file-name" id="fileName"></div>
+          </div>
+          <input type="file" id="fileInput" accept=".pdf,application/pdf">
+        </div>
+
+        <!-- Question -->
+        <div class="field">
+          <label class="field-label" for="questionInput">Question</label>
+          <input type="text" class="question-input" id="questionInput"
+            placeholder="What are the safety warnings in this manual?"
+            value="What are the safety warnings in this manual?">
+        </div>
+
+        <!-- Run -->
+        <div class="field run-field">
+          <button class="run-btn" id="runBtn" onclick="handleRun()" disabled>Run the loop</button>
+          <p class="run-reason" id="runReason">Choose a PDF to run the loop.</p>
+        </div>
+
+        <!-- Connection -->
+        <details class="connection" id="connectionPanel">
+          <summary>
+            <span class="eyebrow">Connection</span>
+            <span class="connection-state" id="connectionState">checking…</span>
+          </summary>
+          <div class="connection-body">
+            <div class="config-hint" id="configHint">
+              Copy <code>.env.example</code> to <code>.env</code> and fill in your credentials from
+              the Champion Portal.
+            </div>
+            <div class="config-hint hidden" id="configStatus">
+              Config loaded from <code>.env</code>. The app uses those values automatically.
+            </div>
+            <dl class="connection-list" id="connectionList"></dl>
+          </div>
+        </details>
       </div>
-      <div class="file-name" id="fileName"></div>
-    </div>
-    <input type="file" id="fileInput" accept=".pdf,application/pdf">
+    </section>
 
-    <!-- Question + Run -->
-    <div class="question-row">
-      <input type="text" class="question-input" id="questionInput"
-        placeholder="What are the safety warnings in this manual?"
-        value="What are the safety warnings in this manual?">
-      <button class="run-btn" id="runBtn" onclick="handleRun()">Run</button>
-    </div>
+    <!-- ── Trace column ──────────────────────────────── -->
+    <section class="col-trace" aria-labelledby="traceHeading">
 
-    <!-- Error Banner -->
-    <div class="error-banner" id="errorBanner"></div>
+      <div class="error-banner" id="errorBanner" role="alert"></div>
 
-    <!-- Loop Trace -->
-    <div class="section-header">LOOP TRACE</div>
-    <div class="loop-trace" id="loopTrace"></div>
+      <div class="trace-head">
+        <h2 class="eyebrow section-eyebrow" id="traceHeading">Trace</h2>
+        <span class="trace-total mono" id="traceTotal" aria-live="off"></span>
+      </div>
 
-    <!-- Answer -->
-    <div class="answer-section" id="answerSection">
-      <div class="section-header">ANSWER</div>
-      <div class="answer-box" id="answerBox"></div>
-    </div>
+      <div class="loop-trace" id="loopTrace" aria-live="polite"></div>
 
-  </div>
+      <p class="trace-empty" id="traceEmpty">
+        Fill in the fields and run the loop — each step appears here as it happens.
+      </p>
+
+      <div class="answer-section" id="answerSection">
+        <h2 class="eyebrow section-eyebrow">Answer</h2>
+        <div class="answer-box" id="answerBox"></div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <script>
+    // Keyboard access for the drop zone: helpers.js listens for a click,
+    // so Enter/Space just dispatches one.
+    (function wireDropZoneKeys() {
+      const zone = document.getElementById('uploadArea');
+      zone.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          zone.click();
+        }
+      });
+    })();
+
+    // Colour-scheme toggle. Purely presentational — no effect on the loop.
+    (function wireThemeToggle() {
+      const toggle = document.getElementById('themeToggle');
+      toggle.addEventListener('click', () => {
+        const root = document.documentElement;
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const current = root.getAttribute('data-theme') || (prefersDark ? 'dark' : 'light');
+        const next = current === 'dark' ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        try { localStorage.setItem('workshop-theme', next); } catch { /* storage blocked */ }
+      });
+    })();
+  </script>
 
   <!--
     ┌─────────────────────────────────────────────────────────┐

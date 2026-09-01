@@ -37,10 +37,37 @@ function getDealerGuid() {
   return DEALER_GUID;
 }
 
-function showBanner(message) {
+/**
+ * Show the error banner: what happened, and what to do next.
+ * `next` is optional; pass it when there is a clear next move.
+ */
+function showBanner(message, next, heading) {
   const banner = document.getElementById('errorBanner');
-  banner.textContent = message;
+  banner.textContent = '';
+
+  const title = document.createElement('span');
+  title.className = 'banner-title';
+  title.textContent = heading || 'That run stopped';
+
+  const detail = document.createElement('span');
+  detail.className = 'banner-detail';
+  detail.textContent = message;
+
+  banner.appendChild(title);
+  banner.appendChild(detail);
+
+  if (next) {
+    const hint = document.createElement('span');
+    hint.className = 'banner-next';
+    hint.textContent = next;
+    banner.appendChild(hint);
+  }
+
   banner.classList.add('visible');
+}
+
+function hideBanner() {
+  document.getElementById('errorBanner').classList.remove('visible');
 }
 
 async function checkForAppUpdate() {
@@ -54,7 +81,11 @@ async function checkForAppUpdate() {
     if (!data?.version || data.version === APP_VERSION) return false;
 
     _reloadScheduled = true;
-    showBanner('A newer version of this workshop app is available. Reloading so you get the latest Gateway response handling...');
+    showBanner(
+      'A newer version of this workshop app is available.',
+      'Reloading now so you get the latest Gateway response handling.',
+      'New version available'
+    );
     setTimeout(() => window.location.reload(), 1200);
     return true;
   } catch {
@@ -67,9 +98,6 @@ async function checkForAppUpdate() {
 // ═══════════════════════════════════════════════════════════════
 
 async function loadEnv() {
-  const configHint = document.getElementById('configHint');
-  const configStatus = document.getElementById('configStatus');
-
   try {
     const res = await fetch(`.env?v=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) throw new Error();
@@ -93,14 +121,83 @@ async function loadEnv() {
     // Keep the setup hint visible when .env is missing or incomplete.
   }
 
-  if (IDMS_URL && GATEWAY_URL && UMH_URL && DEALER_GUID &&
-      _config.username && _config.password && _config.clientSecret) {
-    configHint.classList.add('hidden');
-    configStatus.classList.remove('hidden');
-  } else {
-    configHint.classList.remove('hidden');
-    configStatus.classList.add('hidden');
+  renderConnection();
+  updateRunAvailability();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  CONNECTION PANEL — shows where the calls go and whether
+//  credentials loaded. Never prints a secret.
+// ═══════════════════════════════════════════════════════════════
+
+function _hostOf(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url || '';
   }
+}
+
+function _environmentLabel() {
+  const host = _hostOf(GATEWAY_URL).toLowerCase();
+  if (!host) return '';
+  if (host.includes('test')) return 'TEST';
+  if (host.includes('prod')) return 'PROD';
+  return 'DEV';
+}
+
+function isConfigComplete() {
+  return Boolean(
+    IDMS_URL && GATEWAY_URL && UMH_URL && DEALER_GUID &&
+    _config.username && _config.password && _config.clientSecret
+  );
+}
+
+function renderConnection() {
+  const configHint = document.getElementById('configHint');
+  const configStatus = document.getElementById('configStatus');
+  const ready = isConfigComplete();
+
+  configHint.classList.toggle('hidden', ready);
+  configStatus.classList.toggle('hidden', !ready);
+
+  const chip = document.getElementById('envChip');
+  const env = _environmentLabel();
+  chip.textContent = env || 'NO ENV';
+  if (env) {
+    chip.setAttribute('data-env', env);
+  } else {
+    chip.removeAttribute('data-env');
+  }
+
+  const state = document.getElementById('connectionState');
+  state.textContent = ready ? 'credentials loaded' : 'not configured';
+  state.setAttribute('data-ok', String(ready));
+
+  const rows = [
+    ['Gateway', _hostOf(GATEWAY_URL), Boolean(GATEWAY_URL)],
+    ['Media hub', _hostOf(UMH_URL), Boolean(UMH_URL)],
+    ['Identity', _hostOf(IDMS_URL), Boolean(IDMS_URL)],
+    ['Dealer', DEALER_GUID, Boolean(DEALER_GUID)],
+    ['Username', _config.username, Boolean(_config.username)],
+    ['Password', _config.password ? '••••••• loaded' : '', Boolean(_config.password)],
+    ['Secret', _config.clientSecret ? '••••••• loaded' : '', Boolean(_config.clientSecret)]
+  ];
+
+  const list = document.getElementById('connectionList');
+  list.textContent = '';
+
+  for (const [label, value, ok] of rows) {
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.textContent = ok ? value : 'missing from .env';
+    dd.setAttribute('data-ok', String(ok));
+    list.appendChild(dt);
+    list.appendChild(dd);
+  }
+
+  if (!ready) document.getElementById('connectionPanel').open = true;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -288,40 +385,339 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
   return { message: finalMessage, toolCalls };
 }
 
-/**
- * Add a new step card to the loop trace.
- */
-function addStep(id, title, detail, status) {
-  const trace = document.getElementById('loopTrace');
-  const card = document.createElement('div');
-  card.className = `step-card ${status}`;
-  card.id = `step-${id}`;
+// ═══════════════════════════════════════════════════════════════
+//  TRACE RENDERING — the timing rail
+//
+//  addStep(id, title, detail, status) and updateStep(id, detail, status)
+//  are the contract loop.js writes against. Everything below is how
+//  they draw: a step is a row on the rail carrying its elapsed time,
+//  and a step started while another step is still running is drawn as
+//  a child of that step — which is exactly what a tool call is.
+// ═══════════════════════════════════════════════════════════════
 
-  const statusIcons = { thinking: '...', waiting: '&#8987;', complete: '&#10003;', error: '&#10007;' };
+// Statuses loop.js uses, mapped to the four visual states.
+const STEP_STATES = {
+  thinking: 'running',
+  waiting: 'running',
+  complete: 'done',
+  error: 'failed'
+};
 
-  card.innerHTML = `
-    <div class="step-title">
-      ${title}
-      <span class="step-status-icon">${statusIcons[status] || ''}</span>
-    </div>
-    <div class="step-detail">${detail}</div>
-  `;
+const _steps = new Map();
+let _traceStart = 0;
+let _stepNumber = 0;
+let _traceTicker = null;
 
-  trace.appendChild(card);
-  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+function _visualState(status) {
+  return STEP_STATES[status] || 'idle';
+}
+
+function _formatSeconds(ms) {
+  return `${(Math.max(0, ms) / 1000).toFixed(2)}s`;
+}
+
+function _reducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function _scrollIntoView(el) {
+  el.scrollIntoView({ behavior: _reducedMotion() ? 'auto' : 'smooth', block: 'nearest' });
+}
+
+/** Clear the trace and restart the clock. Called when a run starts. */
+function resetTrace() {
+  document.getElementById('loopTrace').textContent = '';
+  document.getElementById('traceTotal').textContent = '';
+  document.getElementById('traceEmpty').style.display = 'none';
+  _steps.clear();
+  _stepNumber = 0;
+  _traceStart = performance.now();
+  _stopTicker();
+}
+
+function _stopTicker() {
+  if (_traceTicker !== null) {
+    clearInterval(_traceTicker);
+    _traceTicker = null;
+  }
 }
 
 /**
- * Update an existing step card's detail text and status.
+ * A run finished: stop the clock. Steps that never reported a result keep
+ * their colour but stop pulsing — no completion event arrived for them.
+ */
+function freezeTrace() {
+  const now = performance.now();
+  for (const step of _steps.values()) {
+    if (step.endedAt === null) {
+      step.el.setAttribute('data-settled', 'true');
+      step.durationEl.textContent = _formatSeconds(now - step.startedAt);
+    }
+  }
+  _stopTicker();
+}
+
+/** A run ended early: freeze the clock and mark whatever was in flight. */
+function haltTrace() {
+  for (const step of _steps.values()) {
+    if (step.endedAt === null) {
+      step.el.setAttribute('data-state', 'failed');
+      step.endedAt = performance.now();
+      step.durationEl.textContent = _formatSeconds(step.endedAt - step.startedAt);
+    }
+  }
+  _stopTicker();
+}
+
+/** Keep every running step's duration honest while it runs. */
+function _tick() {
+  const now = performance.now();
+  let running = false;
+
+  for (const step of _steps.values()) {
+    if (step.endedAt === null) {
+      running = true;
+      step.durationEl.textContent = _formatSeconds(now - step.startedAt);
+    }
+  }
+
+  document.getElementById('traceTotal').textContent =
+    _steps.size ? `total ${_formatSeconds(now - _traceStart)}` : '';
+
+  if (!running) _stopTicker();
+}
+
+function _startTicker() {
+  if (_traceTicker === null) _traceTicker = setInterval(_tick, 100);
+  _tick();
+}
+
+/** The step a new step belongs under: the deepest top-level step still running. */
+function _openParent() {
+  let parent = null;
+  for (const step of _steps.values()) {
+    if (step.depth === 0 && step.endedAt === null) parent = step;
+  }
+  return parent;
+}
+
+/**
+ * Payload rendering for a nested tool call: one collapsed line, expandable
+ * to the whole body. Long or multi-line text gets the toggle; short text
+ * just shows.
+ */
+function _renderDetail(step, detail) {
+  const text = detail === undefined || detail === null ? '' : String(detail);
+  step.detailText = text;
+
+  if (step.depth === 0) {
+    step.detailEl.textContent = text;
+    return;
+  }
+
+  const expandable = text.length > 72 || text.includes('\n') || text.includes('{');
+  step.body.querySelectorAll('.step-summary, .step-payload, .expand-btn').forEach(el => el.remove());
+  if (!text) return;
+
+  if (!expandable) {
+    const summary = document.createElement('div');
+    summary.className = 'step-summary';
+    summary.textContent = text;
+    step.body.insertBefore(summary, step.children);
+    return;
+  }
+
+  const summary = document.createElement('div');
+  summary.className = 'step-summary';
+  summary.textContent = text;
+
+  const payload = document.createElement('pre');
+  payload.className = 'step-payload';
+  payload.textContent = text;
+  payload.hidden = !step.expanded;
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'expand-btn';
+  toggle.setAttribute('aria-expanded', String(Boolean(step.expanded)));
+
+  function paint() {
+    summary.hidden = Boolean(step.expanded);
+    payload.hidden = !step.expanded;
+    toggle.textContent = step.expanded ? 'hide payload' : 'show payload';
+    toggle.setAttribute('aria-expanded', String(Boolean(step.expanded)));
+  }
+
+  toggle.addEventListener('click', () => {
+    step.expanded = !step.expanded;
+    paint();
+  });
+
+  paint();
+  step.body.insertBefore(summary, step.children);
+  step.body.insertBefore(payload, step.children);
+  step.body.insertBefore(toggle, step.children);
+}
+
+/**
+ * A "thinking" note is a moment between tool calls, not a span the Gateway
+ * ever closes. The next event under the same step ends it.
+ */
+function _settleThoughts(parent) {
+  if (!parent) return;
+  const now = performance.now();
+  for (const step of _steps.values()) {
+    if (step.parent === parent && step.kind === 'think' && step.endedAt === null) {
+      step.endedAt = now;
+      step.el.setAttribute('data-state', 'idle');
+      step.durationEl.textContent = _formatSeconds(step.endedAt - step.startedAt);
+    }
+  }
+}
+
+function _applyState(step, status) {
+  const state = _visualState(status);
+  step.el.setAttribute('data-state', state);
+  if (state !== 'running' && state !== 'idle') _settleThoughts(step);
+
+  if (state === 'running') {
+    if (step.endedAt !== null) {
+      step.endedAt = null;
+      step.startedAt = performance.now();
+    }
+    _startTicker();
+  } else if (state !== 'idle' && step.endedAt === null) {
+    step.endedAt = performance.now();
+    step.durationEl.textContent = _formatSeconds(step.endedAt - step.startedAt);
+  }
+}
+
+/**
+ * Add a new step to the loop trace.
+ *
+ * @param {string} id      - Stable id; updateStep(id, ...) targets the same step
+ * @param {string} title   - Step name, or the tool name for a tool call
+ * @param {string} detail  - Body text; tool payloads collapse behind a toggle
+ * @param {string} status  - thinking | waiting | complete | error
+ * @param {object} [options] - Optional. { parent: 'step-id' } to force nesting.
+ */
+function addStep(id, title, detail, status, options) {
+  if (!_traceStart) _traceStart = performance.now();
+  document.getElementById('traceEmpty').style.display = 'none';
+
+  // Re-adding an id (the agent calling the same tool twice) reuses the row so
+  // updateStep(id, ...) stays unambiguous.
+  const existing = _steps.get(id);
+  if (existing) {
+    existing.titleEl.textContent = title;
+    // Each thinking event is a fresh moment, so restart its clock.
+    const restart = existing.endedAt !== null || existing.kind === 'think';
+    if (_visualState(status) === 'running' && restart) {
+      existing.endedAt = null;
+      existing.startedAt = performance.now();
+      existing.timeEl.textContent = _formatSeconds(existing.startedAt - _traceStart);
+      // A restarted child belongs after whatever has happened since, so the
+      // rail stays in chronological order.
+      if (existing.depth === 1 && existing.parent) {
+        existing.parent.children.appendChild(existing.el);
+      }
+    }
+    if (existing.kind !== 'think') _settleThoughts(existing.parent);
+    _applyState(existing, status);
+    _renderDetail(existing, detail);
+    return;
+  }
+
+  const forcedParent = options && options.parent ? _steps.get(options.parent) : undefined;
+  const parent = forcedParent !== undefined ? forcedParent : _openParent();
+  const depth = parent ? 1 : 0;
+  const isTool = String(id).startsWith('tool-');
+  _settleThoughts(parent);
+
+  const el = document.createElement('div');
+  el.className = 'step';
+  el.id = `step-${id}`;
+  el.setAttribute('data-depth', String(depth));
+  el.setAttribute('data-kind', depth === 0 ? 'step' : (isTool ? 'tool' : 'think'));
+
+  const rail = document.createElement('div');
+  rail.className = 'step-rail';
+  const marker = document.createElement('span');
+  marker.className = 'step-marker';
+  rail.appendChild(marker);
+
+  const timeEl = document.createElement('div');
+  timeEl.className = 'step-time';
+  timeEl.textContent = _formatSeconds(performance.now() - _traceStart);
+
+  const body = document.createElement('div');
+  body.className = 'step-body';
+
+  const head = document.createElement('div');
+  head.className = 'step-head';
+
+  if (depth === 0) {
+    _stepNumber += 1;
+    const num = document.createElement('span');
+    num.className = 'step-num';
+    num.textContent = String(_stepNumber);
+    head.appendChild(num);
+  }
+
+  const titleEl = document.createElement('span');
+  titleEl.className = depth === 0 ? 'step-title' : 'tool-name';
+  titleEl.textContent = title;
+  head.appendChild(titleEl);
+
+  const durationEl = document.createElement('span');
+  durationEl.className = 'step-dur';
+  head.appendChild(durationEl);
+
+  const detailEl = document.createElement('div');
+  detailEl.className = 'step-detail';
+
+  const children = document.createElement('div');
+  children.className = 'step-children';
+
+  body.appendChild(head);
+  if (depth === 0) body.appendChild(detailEl);
+  body.appendChild(children);
+
+  el.appendChild(rail);
+  el.appendChild(timeEl);
+  el.appendChild(body);
+
+  const step = {
+    el, body, head, titleEl, detailEl, durationEl, children, depth, timeEl,
+    parent: parent || null,
+    kind: depth === 0 ? 'step' : (isTool ? 'tool' : 'think'),
+    startedAt: performance.now(),
+    endedAt: null,
+    expanded: false,
+    detailText: ''
+  };
+
+  _steps.set(id, step);
+  (parent ? parent.children : document.getElementById('loopTrace')).appendChild(el);
+
+  _applyState(step, status);
+  _renderDetail(step, detail);
+  _scrollIntoView(el);
+}
+
+/**
+ * Update an existing step's detail text and status.
+ *
+ * @param {string} id     - The id passed to addStep
+ * @param {string} detail - New body text
+ * @param {string} status - thinking | waiting | complete | error
  */
 function updateStep(id, detail, status) {
-  const card = document.getElementById(`step-${id}`);
-  if (!card) return;
+  const step = _steps.get(id);
+  if (!step) return;
 
-  card.className = `step-card ${status}`;
-  const statusIcons = { thinking: '...', waiting: '&#8987;', complete: '&#10003;', error: '&#10007;' };
-  card.querySelector('.step-status-icon').innerHTML = statusIcons[status] || '';
-  card.querySelector('.step-detail').textContent = detail;
+  _applyState(step, status);
+  _renderDetail(step, detail);
 }
 
 /**
@@ -330,9 +726,9 @@ function updateStep(id, detail, status) {
 function showAnswer(html) {
   const section = document.getElementById('answerSection');
   const box = document.getElementById('answerBox');
-  box.innerHTML = html || '<em>No final answer was returned by the Gateway.</em>';
+  box.innerHTML = html || '<em>The Gateway returned no final answer.</em>';
   section.classList.add('visible');
-  section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  _scrollIntoView(section);
 }
 
 /**
@@ -366,41 +762,71 @@ fileInput.addEventListener('change', () => {
 });
 
 function selectFile(file) {
-  if (file.type !== 'application/pdf') { alert('Please select a PDF file.'); return; }
-  if (file.size > 10 * 1024 * 1024) { alert('File too large. Maximum size is 10 MB.'); return; }
+  if (file.type !== 'application/pdf') {
+    showBanner('That file is not a PDF.', 'Pick a PDF and try again.', 'Wrong file type');
+    return;
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    showBanner('That PDF is larger than 10 MB.', 'Pick a smaller document and try again.', 'File too large');
+    return;
+  }
+  hideBanner();
   selectedFile = file;
   uploadArea.classList.add('has-file');
   fileNameEl.textContent = file.name;
+  updateRunAvailability();
 }
+
+/** The run button says what is missing rather than failing on click. */
+function updateRunAvailability() {
+  const btn = document.getElementById('runBtn');
+  const reason = document.getElementById('runReason');
+  if (btn.dataset.running === 'true') return;
+
+  const question = document.getElementById('questionInput').value.trim();
+
+  let blocker = '';
+  if (!isConfigComplete()) blocker = 'Fill in .env to run the loop.';
+  else if (!selectedFile) blocker = 'Choose a PDF to run the loop.';
+  else if (!question) blocker = 'Type a question to run the loop.';
+
+  btn.disabled = Boolean(blocker);
+  reason.textContent = blocker;
+}
+
+document.getElementById('questionInput').addEventListener('input', updateRunAvailability);
 
 // Run button
 async function handleRun() {
   const question = document.getElementById('questionInput').value.trim();
-  if (!question) { alert('Please enter a question.'); return; }
-  if (!selectedFile) { alert('Please select a PDF file.'); return; }
+  if (!question || !selectedFile) { updateRunAvailability(); return; }
 
   if (await checkForAppUpdate()) return;
 
   const btn = document.getElementById('runBtn');
+  btn.dataset.running = 'true';
   btn.disabled = true;
-  btn.textContent = 'Running...';
-  document.getElementById('loopTrace').innerHTML = '';
+  btn.textContent = 'Running the loop…';
+  document.getElementById('runReason').textContent = '';
+  resetTrace();
   document.getElementById('answerSection').classList.remove('visible');
-  document.getElementById('errorBanner').classList.remove('visible');
+  hideBanner();
 
   try {
     await authenticate();
     await runAgenticLoop(selectedFile, question);
   } catch (err) {
-    const banner = document.getElementById('errorBanner');
-    banner.textContent = `Error: ${err.message}`;
-    banner.classList.add('visible');
+    haltTrace();
+    showBanner(err.message, 'Fix the cause above, then run the loop again.');
     console.error(err);
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Run';
+    freezeTrace();
+    btn.dataset.running = 'false';
+    btn.textContent = 'Run the loop';
+    updateRunAvailability();
   }
 }
 
 // Load .env on page load
 loadEnv();
+updateRunAvailability();
