@@ -9,7 +9,7 @@ A hands-on exercise where you upload a PDF, wait for it to be indexed, and then 
 3. Make sure Node.js LTS is installed
 4. Run `npx --yes http-server . -a localhost -p 5173 -c-1`
 5. Open `http://localhost:5173`
-6. Click **Run** to see Step 1 execute (and a prompt to implement the rest)
+6. Click **Run the loop** to see Step 1 execute (and a prompt to implement the rest)
 
 ## File Structure
 
