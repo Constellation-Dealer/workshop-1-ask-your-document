@@ -403,7 +403,12 @@ const STEP_STATES = {
   error: 'failed'
 };
 
+// _steps is keyed by a UNIQUE occurrence key and iterated in insertion order,
+// so every loop over it walks the trace chronologically. _byId maps the LOGICAL
+// id a caller passes (`poll`, `tool-get_artifact`, `thinking`) to each occurrence
+// of it, newest last, so updateStep can find the right row when an id repeats.
 const _steps = new Map();
+const _byId = new Map();
 let _traceStart = 0;
 let _stepNumber = 0;
 let _traceTicker = null;
@@ -430,6 +435,7 @@ function resetTrace() {
   document.getElementById('traceTotal').textContent = '';
   document.getElementById('traceEmpty').style.display = 'none';
   _steps.clear();
+  _byId.clear();
   _stepNumber = 0;
   _traceStart = performance.now();
   _stopTicker();
@@ -493,6 +499,25 @@ function _startTicker() {
 }
 
 /** The step a new step belongs under: the deepest top-level step still running. */
+// The two ids the Gateway's streamed events arrive under. These nest inside the
+// step that was running when they arrived; anything else is a workflow step of
+// the participant's own loop and stays top-level. Pass options.nest to override.
+function _isStreamedEvent(id) {
+  const s = String(id);
+  return s.startsWith('tool-') || s === 'thinking';
+}
+
+// The row a caller means when they name an id: the newest occurrence still open,
+// else the newest overall. An id that has never been added returns undefined.
+function _latestFor(id) {
+  const list = _byId.get(id);
+  if (!list || !list.length) return undefined;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].endedAt === null) return list[i];
+  }
+  return list[list.length - 1];
+}
+
 function _openParent() {
   let parent = null;
   for (const step of _steps.values()) {
@@ -605,38 +630,29 @@ function addStep(id, title, detail, status, options) {
   if (!_traceStart) _traceStart = performance.now();
   document.getElementById('traceEmpty').style.display = 'none';
 
-  // Re-adding an id (the agent calling the same tool twice) reuses the row so
-  // updateStep(id, ...) stays unambiguous.
-  const existing = _steps.get(id);
-  if (existing) {
-    existing.titleEl.textContent = title;
-    // Each thinking event is a fresh moment, so restart its clock.
-    const restart = existing.endedAt !== null || existing.kind === 'think';
-    if (_visualState(status) === 'running' && restart) {
-      existing.endedAt = null;
-      existing.startedAt = performance.now();
-      existing.timeEl.textContent = _formatSeconds(existing.startedAt - _traceStart);
-      // A restarted child belongs after whatever has happened since, so the
-      // rail stays in chronological order.
-      if (existing.depth === 1 && existing.parent) {
-        existing.parent.children.appendChild(existing.el);
-      }
-    }
-    if (existing.kind !== 'think') _settleThoughts(existing.parent);
-    _applyState(existing, status);
-    _renderDetail(existing, detail);
-    return;
-  }
-
-  const forcedParent = options && options.parent ? _steps.get(options.parent) : undefined;
-  const parent = forcedParent !== undefined ? forcedParent : _openParent();
+  // Only streamed Gateway events nest. Inferring a parent from "something is
+  // still open" put a half-finished learner loop into a wrong shape: add `poll`,
+  // forget to complete it, add `gateway`, and Gateway became a CHILD of Poll --
+  // and because only depth-0 rows are candidates, every later tool event then
+  // hung off Poll too. A workflow step is now always top-level.
+  const nestable = options && typeof options.nest === 'boolean'
+    ? options.nest
+    : _isStreamedEvent(id);
+  const forcedParent = options && options.parent ? _latestFor(options.parent) : undefined;
+  const parent = forcedParent !== undefined
+    ? forcedParent
+    : (nestable ? _openParent() : null);
   const depth = parent ? 1 : 0;
   const isTool = String(id).startsWith('tool-');
   _settleThoughts(parent);
 
+  // The first occurrence keeps the plain `step-<id>` element id, so code that
+  // looks a step up by name (the exercise skeleton checks for `step-poll`) still
+  // finds it; later occurrences are suffixed so ids stay unique in the document.
+  const occurrence = (_byId.get(id) || []).length;
   const el = document.createElement('div');
   el.className = 'step';
-  el.id = `step-${id}`;
+  el.id = occurrence === 0 ? `step-${id}` : `step-${id}--${occurrence + 1}`;
   el.setAttribute('data-depth', String(depth));
   el.setAttribute('data-kind', depth === 0 ? 'step' : (isTool ? 'tool' : 'think'));
 
@@ -697,7 +713,10 @@ function addStep(id, title, detail, status, options) {
     detailText: ''
   };
 
-  _steps.set(id, step);
+  step.logicalId = id;
+  _steps.set(occurrence === 0 ? id : `${id}#${occurrence + 1}`, step);
+  if (!_byId.has(id)) _byId.set(id, []);
+  _byId.get(id).push(step);
   (parent ? parent.children : document.getElementById('loopTrace')).appendChild(el);
 
   _applyState(step, status);
@@ -713,7 +732,7 @@ function addStep(id, title, detail, status, options) {
  * @param {string} status - thinking | waiting | complete | error
  */
 function updateStep(id, detail, status) {
-  const step = _steps.get(id);
+  const step = _latestFor(id);
   if (!step) return;
 
   _applyState(step, status);
