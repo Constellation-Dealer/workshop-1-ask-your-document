@@ -1,0 +1,22 @@
+name: contrast
+
+# The exercise UI is read in a bright room, on 31 laptops nobody has calibrated. Faint
+# text does not get reported as a bug -- people just quietly lose track of what the agent
+# loop is doing, which is the one thing the page exists to show.
+#
+# This runs on every push and PR because the palette is the kind of thing that gets
+# adjusted casually. It derives the colours it checks FROM the stylesheet, so it covers a
+# rule written after it, and it needs no dependencies -- ubuntu-latest ships python3.
+
+on:
+  push:
+    branches: [main, solution]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  contrast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 .github/scripts/check-contrast.py styles.css
