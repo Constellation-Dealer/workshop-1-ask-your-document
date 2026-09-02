@@ -10,19 +10,34 @@ A hands-on exercise where you upload a PDF, wait for it to be indexed, and then 
 4. Run `npx --yes http-server . -a localhost -p 3000 -c-1`
 5. Open `http://localhost:3000`
 
-> **If the page does not load, or sign-in fails with `Failed to fetch`:** something else on your
-> machine already owns the port. Try `5173` instead — it works too. (Vite's defaults `5173`/`5174`
-> are the usual culprits, which is why this workshop is not on them.) Check who has it with
-> `lsof -nP -iTCP:3000 -sTCP:LISTEN` (macOS/Linux) or `netstat -ano | findstr :3000` (Windows).
+> **If the page does not load, or a call fails with `Failed to fetch`:** something else on your
+> machine is already using port 3000.
 >
-> **Open the `localhost` address, not the `127.0.0.1` one** that some servers also print. Only
-> the `localhost` spelling is allowed, so the `127.0.0.1` link fails in exactly the same way as
-> a wrong port.
+> 1. **Most likely it is the previous workshop.** All three exercises serve on 3000, and they run
+>    one after another — so the server you started an hour ago still has it. Go back to that
+>    terminal and press **Ctrl+C**, then start this one again.
+> 2. **Otherwise, find out what has it:** `lsof -nP -iTCP:3000 -sTCP:LISTEN` (macOS/Linux) or
+>    `netstat -ano | findstr :3000` (Windows).
+> 3. **If it is something you need to keep running,** use 5173 instead — it is allowlisted too:
+>
+>    ```
+>    npx --yes http-server . -a localhost -p 5173 -c-1
+>    ```
+>
+>    then open <http://localhost:5173>. Be aware 5173 is Vite's default port, so it may well be
+>    taken as well; 3000 with the previous server stopped is the more reliable route.
+>
+> **Open the `localhost` address, not the `127.0.0.1` one** that some servers also print.
+> `127.0.0.1` is a *different* origin as far as the browser is concerned, and it is not
+> allowlisted — so that link fails in exactly the same way as a wrong port.
+
 
 
 6. Click **Run the loop** to see Step 1 execute (and a prompt to implement the rest)
 
-> **Do NOT open `index.html` directly as a file** (`file://...`). The APIs will reject requests that don't come from `http://localhost:3000`.
+> **Do NOT open `index.html` directly as a file** (`file://...`). A `file://` page has no HTTP
+> origin at all, so every API call is refused — this is about serving over HTTP, not about which
+> port you pick. Both `http://localhost:3000` and `http://localhost:5173` are allowlisted.
 
 ## File Structure
 
