@@ -757,3 +757,49 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Answer feedback ─────────────────────────────────────────────
+   The thumb row under the answer. Colours here are the text tokens, not the
+   decorative ones: --muted, --trace and --oxide all clear 4.5:1 on both page
+   surfaces in both themes, which .github/scripts/check-contrast.py asserts. */
+.answer-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  min-height: 26px;
+  font-size: 13px;
+}
+.fb-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.fb-status:empty { display: none; }
+.fb-status:focus-visible { outline: 2px solid var(--trace); outline-offset: 2px; }
+.fb-btn[disabled] { cursor: default; opacity: 1; }   /* never fade text to signal state */
+.fb-label { color: var(--muted); }
+.fb-btn {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--hair);
+  border-radius: 3px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.fb-btn:hover { border-color: var(--rail); }
+.fb-btn:focus-visible { outline: 2px solid var(--trace); outline-offset: 1px; }
+.fb-input {
+  flex: 1 1 240px;
+  min-width: 0;              /* so a long placeholder cannot push the row sideways */
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--hair);
+  border-radius: 3px;
+  padding: 4px 8px;
+}
+.fb-input:focus-visible { outline: 2px solid var(--trace); outline-offset: 1px; }
+.fb-note { color: var(--muted); }
+.fb-ok   { color: var(--trace); }
+.fb-err  { color: var(--oxide); }
