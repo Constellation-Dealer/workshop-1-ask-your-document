@@ -35,7 +35,7 @@
     --ink: #DCE7EE;
     --muted: #93AABA;
     --rail: #33505F;
-    --trace: #2E9C87;
+    --trace: #32AA93;
     --amber: #D89B4A;
     --amber-text: #D89B4A;
     --oxide: #E07A66;
@@ -55,7 +55,7 @@
   --ink: #DCE7EE;
   --muted: #93AABA;
   --rail: #33505F;
-  --trace: #2E9C87;
+  --trace: #32AA93;
   --amber: #D89B4A;
   --amber-text: #D89B4A;
   --oxide: #E07A66;
@@ -236,7 +236,7 @@ body {
   background: var(--tint-trace);
 }
 
-.upload-icon { color: var(--rail); display: flex; }
+.upload-icon { color: var(--muted); display: flex; }
 .upload-area.has-file .upload-icon { color: var(--trace); }
 
 .upload-text { font-size: 13px; }
