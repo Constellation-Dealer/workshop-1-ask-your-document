@@ -12,7 +12,8 @@ name: checks
 #   and the queue just goes quiet. Driven in a real headless Chrome over CDP,
 #   because the bug this guards against lives in DOM wiring, not in a function.
 #
-# Neither needs a dependency install: ubuntu-latest ships python3, node and Chrome.
+# Neither installs anything: ubuntu-latest ships python3, node and Chrome, and the
+# static server is python3's own. No npm package is fetched at check time.
 
 on:
   push:
@@ -32,8 +33,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Serve the app
+        # python3's own static server, not `npx --yes http-server`: that fetched and
+        # executed the latest unpinned npm package on every run, which is a
+        # supply-chain execution path this repo does not need -- the app is static
+        # files and the runner already has python3.
         run: |
-          npx --yes http-server . -a 127.0.0.1 -p 5199 -c-1 > /tmp/http.log 2>&1 &
+          python3 -m http.server 5199 --bind 127.0.0.1 > /tmp/http.log 2>&1 &
           for i in $(seq 1 30); do
             curl -sf -o /dev/null http://127.0.0.1:5199/ && break
             sleep 1

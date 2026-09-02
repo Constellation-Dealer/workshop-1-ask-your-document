@@ -771,6 +771,10 @@ body {
   min-height: 26px;
   font-size: 13px;
 }
+.fb-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.fb-status:empty { display: none; }
+.fb-status:focus-visible { outline: 2px solid var(--trace); outline-offset: 2px; }
+.fb-btn[disabled] { cursor: default; opacity: 1; }   /* never fade text to signal state */
 .fb-label { color: var(--muted); }
 .fb-btn {
   font-family: var(--font-sans);

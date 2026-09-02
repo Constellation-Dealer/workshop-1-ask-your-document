@@ -21,6 +21,11 @@ const send = (method, params = {}) => new Promise(res => { const i = ++id; pendi
 
 await send('Runtime.enable');
 await send('Page.enable');
+// Serve nothing from cache. `python3 -m http.server` sends no cache headers, so Chrome
+// happily reuses a previous helpers.js -- which makes a test run report on code that is
+// no longer on disk. Mutations "passed" that way before this line existed.
+await send('Network.enable');
+await send('Network.setCacheDisabled', { cacheDisabled: true });
 
 export async function goto(url, readyExpr = 'document.readyState === "complete"') {
   await send('Page.navigate', { url });
