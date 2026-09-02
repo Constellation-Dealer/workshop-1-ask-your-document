@@ -26,6 +26,13 @@ const APP_VERSION = window.__APP_VERSION__ || 'dev';
 let _authToken = null;
 let _reloadScheduled = false;
 
+// The assistant turn the Gateway just persisted. A thumb is feedback ON A TURN, so
+// there is nothing to attach one to until the Gateway tells us which turn it wrote —
+// it arrives on the `complete` event as response.assistantTurnId. Null when the
+// Gateway did not persist the turn, and the UI says so rather than showing a button
+// that cannot work.
+let _lastTurnId = null;
+
 // Config loaded from .env file
 let _config = { username: '', password: '', clientSecret: '' };
 
@@ -320,6 +327,8 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
   let finalMessage = '';
   const toolCalls = [];
   let eventType = null;
+  let assistantTurnId = null;
+  let sessionId = null;
 
   // Gateway events are not perfectly uniform. Normalize the common
   // shapes so the teaching app can focus on the loop, not event plumbing.
@@ -357,6 +366,12 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
         break;
       case 'complete':
         finalMessage = getEventText(data) || finalMessage;
+        // The id of the assistant turn the Gateway persisted, which is what a thumb
+        // attaches to. Additive on the Gateway side, so treat it as optional.
+        if (data && typeof data === 'object' && data.response) {
+          assistantTurnId = data.response.assistantTurnId ?? assistantTurnId;
+          sessionId = data.response.sessionId ?? sessionId;
+        }
         break;
     }
 
@@ -382,7 +397,8 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
     processLine(buffer.trim());
   }
 
-  return { message: finalMessage, toolCalls };
+  _lastTurnId = assistantTurnId;
+  return { message: finalMessage, toolCalls, assistantTurnId, sessionId };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -438,6 +454,7 @@ function resetTrace() {
   _byId.clear();
   _stepNumber = 0;
   _traceStart = performance.now();
+  _resetFeedback();
   _stopTicker();
 }
 
@@ -747,7 +764,238 @@ function showAnswer(html) {
   const box = document.getElementById('answerBox');
   box.innerHTML = html || '<em>The Gateway returned no final answer.</em>';
   section.classList.add('visible');
+  _renderFeedback();
   _scrollIntoView(section);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  FEEDBACK — was that answer any good?
+//
+//  A thumb is not decoration. It is the signal the platform's review queue is
+//  built on: the Gateway stores it against the assistant turn, and it then shows
+//  up in the operator console's eval-review queue for whoever is triaging this
+//  product. Workshop 3 is about judging answers at scale; this is where the
+//  judgements come from in the first place.
+//
+//  It attaches to A TURN, not to a session and not to the text on screen, which
+//  is why it cannot render until the Gateway has told us which turn it persisted.
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Render the thumb row under the answer, or say why there is none.
+ */
+/**
+ * Clear the previous run's rating state. Its own function because it is a GUARD, and a
+ * guard buried inside handleRun cannot be tested without running the whole loop -- so
+ * it was untested, and deleting it left every check green while showAnswer would have
+ * offered a thumb still pointing at the previous run's turn.
+ */
+function _resetFeedback() {
+  _lastTurnId = null;
+  _feedbackHost()?.replaceChildren();
+}
+
+function _feedbackHost() {
+  const host = document.getElementById('answerFeedback');
+  if (!host) console.error('No #answerFeedback element, so the thumb row cannot render.');
+  return host;
+}
+
+/**
+ * The status line, created ONCE and never replaced.
+ *
+ * A live region has to already be in the document when its text changes, or a
+ * screen reader has nothing to watch and the change is announced to nobody. The
+ * first version of this rebuilt the whole row on every state change, which meant
+ * "Sending", "Recorded" and "Could not record that" were all silent -- on a
+ * feature whose entire point was that a failure must not pass unnoticed.
+ */
+function _feedbackStatus() {
+  const host = _feedbackHost();
+  if (!host) return null;
+  let el = host.querySelector('.fb-status');
+  if (!el) {
+    el = document.createElement('span');
+    el.className = 'fb-status fb-note';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.setAttribute('aria-atomic', 'true');   // read the whole line, not the diff
+    el.tabIndex = -1;                         // so focus can be parked here
+    host.appendChild(el);
+  }
+  return el;
+}
+
+function _controls() {
+  const host = _feedbackHost();
+  if (!host) return null;
+  let el = host.querySelector('.fb-controls');
+  if (!el) {
+    el = document.createElement('span');
+    el.className = 'fb-controls';
+    host.insertBefore(el, host.firstChild);
+  }
+  return el;
+}
+
+/**
+ * Is the row still the one this request started against? A `false` here is not a
+ * failure -- the POST landed and the rating is recorded; the user has simply moved on
+ * to another answer, and writing this result over their new row would be a lie about
+ * which turn it belongs to.
+ */
+function _stillOwns(node) {
+  const host = document.getElementById('answerFeedback');
+  return !!host && !!node && host.querySelector('.fb-status') === node;
+}
+
+function _setStatus(text, kind) {
+  const el = _feedbackStatus();
+  if (!el) return;
+  el.className = 'fb-status fb-note' + (kind ? ' ' + kind : '');
+  el.textContent = text;
+}
+
+/** Render the thumb row under the answer, or say why there is none. */
+function _renderFeedback() {
+  const host = _feedbackHost();
+  if (!host) return;
+  host.textContent = '';
+  const controls = _controls();
+  _setStatus('', null);
+
+  // No turn id means the Gateway did not persist this turn (storage off, or the
+  // write failed). Say that, rather than offering a button that would 404 -- a
+  // missing control with no explanation reads as a broken page.
+  if (!_lastTurnId) {
+    _setStatus('This answer was not persisted, so there is no turn to attach feedback to.', null);
+    return;
+  }
+
+  const label = document.createElement('span');
+  label.className = 'fb-label';
+  label.textContent = 'Was this answer useful?';
+
+  const up = document.createElement('button');
+  up.type = 'button';
+  up.className = 'fb-btn';
+  up.setAttribute('aria-label', 'Yes, this answer was useful');
+  up.textContent = '\u{1F44D} Yes';
+
+  const down = document.createElement('button');
+  down.type = 'button';
+  down.className = 'fb-btn';
+  down.setAttribute('aria-label', 'No, this answer was not useful');
+  down.textContent = '\u{1F44E} No';
+
+  up.addEventListener('click', () => _sendFeedback(1, '', up));
+  // A thumbs-down with no comment is a number; with a comment it is something a
+  // reviewer can act on. Ask, but never require it.
+  down.addEventListener('click', () => _promptForComment());
+
+  controls.append(label, up, down);
+}
+
+/** Thumbs-down: offer one line of "what was wrong", then send. */
+function _promptForComment() {
+  const controls = _controls();
+  if (!controls) return;
+  controls.textContent = '';
+
+  const label = document.createElement('label');
+  label.className = 'fb-label';
+  label.setAttribute('for', 'fbComment');
+  label.textContent = 'What was wrong with it?';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'fbComment';
+  input.className = 'fb-input';
+  input.maxLength = 4000;   // the Gateway rejects anything longer
+  input.placeholder = 'Optional \u2014 this is what a reviewer reads';
+
+  const send = document.createElement('button');
+  send.type = 'button';
+  send.className = 'fb-btn';
+  send.textContent = 'Send';
+
+  const submit = () => _sendFeedback(0, input.value.trim(), send);
+  send.addEventListener('click', submit);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+
+  controls.append(label, input, send);
+  input.focus();
+}
+
+/**
+ * POST the thumb to the Gateway. Feedback lands against the assistant turn, and a
+ * thumbs-down enters the product's triage queue.
+ *
+ * `trigger` is the button that was pressed. On failure it is re-enabled and refocused,
+ * so retrying is the same button the user already had -- rather than a new control
+ * appearing somewhere after their focus had been thrown to the top of the document.
+ */
+async function _sendFeedback(score, comment, trigger) {
+  const host = _feedbackHost();
+  if (!host) return;
+  const turnId = _lastTurnId;
+  const buttons = [...host.querySelectorAll('.fb-btn')];
+  const field = host.querySelector('.fb-input');
+  // The status node THIS request owns. Everything below happens after an await, and by
+  // then the row may belong to a different answer: start a new run while a thumb is in
+  // flight and the old response would remove the new answer's buttons and report the
+  // old turn's result over them. A reset or a re-render rebuilds these nodes, so node
+  // identity is what says "still mine" -- and it needs no counter anyone must remember
+  // to bump.
+  const owned = _feedbackStatus();
+
+  buttons.forEach(b => { b.disabled = true; });
+  if (field) field.disabled = true;
+  _setStatus('Sending\u2026', null);
+
+  try {
+    const res = await fetch(`${GATEWAY_URL}/api/v1/${DEALER_GUID}/feedback`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${getToken()}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        conversationTurnId: turnId,
+        score,                             // 1 = up, 0 = down. The Gateway takes no other value.
+        comment: comment || null
+      })
+    });
+
+    if (!res.ok) {
+      // Surface it. A thumb that silently fails to record is worse than no thumb,
+      // because the review queue then under-reports and nobody knows why.
+      const detail = await res.text().catch(() => '');
+      throw new Error(`${res.status} ${res.statusText}${detail ? ' \u2014 ' + detail.slice(0, 300) : ''}`);
+    }
+
+    if (!_stillOwns(owned)) {
+      console.debug(`Feedback for turn ${turnId} recorded, but a newer answer is on screen -- not touching it.`);
+      return;
+    }
+
+    // Done: the controls go, and focus moves to the line that says what happened,
+    // so a keyboard user is not left on a button that no longer exists.
+    _controls()?.replaceChildren();
+    _setStatus(score === 1
+      ? '\u{1F44D} Recorded against turn ' + turnId + '.'
+      : '\u{1F44E} Recorded against turn ' + turnId + ' and queued for review.', 'fb-ok');
+    _feedbackStatus()?.focus();
+  } catch (err) {
+    if (!_stillOwns(owned)) {
+      console.debug(`Feedback for turn ${turnId} failed (${err.message}), but a newer answer is on screen -- not touching it.`);
+      return;
+    }
+    _setStatus(`Could not record that: ${err.message} \u2014 try again.`, 'fb-err');
+    buttons.forEach(b => { b.disabled = false; });
+    if (field) field.disabled = false;
+    (trigger && host.contains(trigger) ? trigger : buttons[0])?.focus();
+  }
 }
 
 /**
