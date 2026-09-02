@@ -16,6 +16,12 @@
      gets its own darker token. Dark mode already clears it at 7.32:1. */
   --amber-text: #8A5A12;
   --oxide: #B3402B;
+  /* The accent is a BACKGROUND as well as a text colour, and the two pull in opposite
+     directions: as text on a dark surface --trace has to be light, while white sitting
+     ON it has to be dark. No value satisfies both -- measured, not guessed -- so the
+     button carries its own foreground. In dark mode that is dark text on the bright
+     accent (6.14:1), the ordinary way round for an accent button on a dark ground. */
+  --on-accent: #FFFFFF;
 
   --hair: #D5DFE6;
   --inset: #F4F7F9;
@@ -39,6 +45,7 @@
     --amber: #D89B4A;
     --amber-text: #D89B4A;
     --oxide: #E07A66;
+    --on-accent: #0E1A22;
 
     --hair: #243B49;
     --inset: #0F1F29;
@@ -59,6 +66,7 @@
   --amber: #D89B4A;
   --amber-text: #D89B4A;
   --oxide: #E07A66;
+  --on-accent: #0E1A22;
 
   --hair: #243B49;
   --inset: #0F1F29;
@@ -273,7 +281,10 @@ body {
 
 .question-input:hover { border-color: var(--rail); }
 .question-input:focus { border-color: var(--trace); }
-.question-input::placeholder { color: var(--muted); opacity: 0.75; }
+/* No opacity here. --muted IS the de-emphasised colour; fading it again took the
+   placeholder to 3.43:1 on the input, and a placeholder is often the only hint of
+   what the field wants. */
+.question-input::placeholder { color: var(--muted); }
 
 .run-field { margin-bottom: 24px; }
 
@@ -283,7 +294,7 @@ body {
   font-family: var(--font-sans);
   font-size: 14px;
   font-weight: 600;
-  color: #FFFFFF;
+  color: var(--on-accent);
   background: var(--trace);
   border: 1px solid var(--trace);
   border-radius: 8px;

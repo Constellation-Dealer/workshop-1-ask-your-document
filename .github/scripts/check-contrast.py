@@ -23,9 +23,13 @@ def over(fg, bg):
     (r, g, b, a) = fg
     return tuple(round(f * a + s * (1 - a)) for f, s in zip((r, g, b), bg))
 
+NAMED = {'white': (255, 255, 255), 'black': (0, 0, 0)}
+
 def parse_colour(v):
     """-> (r,g,b) opaque, or (r,g,b,a) translucent, or None if not a literal colour."""
     v = v.strip()
+    if v.lower() in NAMED:
+        return NAMED[v.lower()]
     m = re.fullmatch(r'#([0-9a-fA-F]{6})', v)
     if m:
         h = m.group(1)
@@ -119,57 +123,97 @@ def resolve(pal, token, seen=()):
         return resolve(pal, m.group(1), seen + (token,))
     return parse_colour(v)
 
+def _value(pal, raw):
+    """Resolve a CSS colour value -- a var(), a literal, or a keyword -- for one theme.
+    Returns (colour, label) or (None, reason) so an unresolvable value can be REPORTED
+    rather than skipped. Skipping is how this check certified a real failure: it only
+    understood `color: var(...)`, so `.run-btn { color: #FFFFFF; background: var(--trace) }`
+    was invisible, and white on the dark --trace is 2.87:1."""
+    raw = raw.strip().rstrip(';').strip()
+    m = re.fullmatch(r'var\(--([\w-]+)(?:\s*,.*)?\)', raw)
+    if m:
+        c = resolve(pal, m.group(1))
+        return (c, f'--{m.group(1)}') if c else (None, f'var(--{m.group(1)}) does not resolve')
+    if 'gradient(' in raw:
+        return None, 'a gradient (cannot be reduced to one colour)'
+    c = parse_colour(raw)
+    if c:
+        return c, raw
+    return None, f'unrecognised colour {raw!r}'
+
+
 MIN_RATIO = 4.5   # WCAG AA, normal-weight text. Every colour here is used at <= 16px.
 
 def check(path):
     css = open(path).read()
     pal_by_theme = palettes(css)
     failures, checked = [], 0
+    # Values that are neither a token nor a literal are REPORTED, never skipped -- an
+    # unreadable declaration is exactly where the last hole was.
+    unresolved = []
 
     for theme, pal in pal_by_theme.items():
-        # The opaque page surfaces a rule can land on when it sets no background of its own.
         surfaces = {t: c for t in ('paper', 'card') if (c := resolve(pal, t)) and len(c) == 3}
         if not surfaces:
             failures.append(f'{theme}: no opaque --paper/--card surface token found')
             continue
 
         for sel, body, line in rules(css):
-            m = re.search(r'(?<![-\w])color:\s*var\(--([\w-]+)\)', body)
-            if not m:
+            fgm = re.search(r'(?<![-\w])color:\s*([^;}]+)', body)
+            if not fgm:
                 continue
-            fg = resolve(pal, m.group(1))
-            if not fg or len(fg) != 3:
+            fg, fg_label = _value(pal, fgm.group(1))
+            if fg is None:
+                # `inherit`/`currentColor`/`transparent` are legitimately not a colour
+                # here; anything else means the check cannot see this rule, so say so.
+                if not re.match(r'^\s*(inherit|currentColor|transparent|unset|initial)\s*$',
+                                fgm.group(1), re.I):
+                    unresolved.append(f'{theme:22s} L{line:<4d} {sel.strip()[:40]:40s} color: {fg_label}')
                 continue
 
-            # If the rule paints its own background, that is the surface. Otherwise the text
-            # can sit on either page surface, so it must clear the bar on the worse one.
-            bgm = re.search(r'background(?:-color)?:\s*(?:[^;]*?)var\(--([\w-]+)\)', body)
-            candidates = []
-            if bgm and (own := resolve(pal, bgm.group(1))):
-                # A translucent own-background composites over whatever is behind it.
-                candidates = ([(f'--{bgm.group(1)} over --{n}', over(own, s)) for n, s in surfaces.items()]
-                              if len(own) == 4 else [(f'--{bgm.group(1)}', own)])
-            if not candidates:
-                candidates = [(f'--{n}', s) for n, s in surfaces.items()]
+            bgm = re.search(r'background(?:-color)?:\s*([^;}]+)', body)
+            own = None
+            own_label = ''
+            if bgm and not re.match(r'^\s*(transparent|none|inherit|unset|initial)\s*$',
+                                    bgm.group(1), re.I):
+                own, own_label = _value(pal, bgm.group(1))
+                if own is None:
+                    unresolved.append(f'{theme:22s} L{line:<4d} {sel.strip()[:40]:40s} background: {own_label}')
+
+            if own is not None:
+                candidates = ([(f'{own_label} over --{n}', over(own, sv)) for n, sv in surfaces.items()]
+                              if len(own) == 4 else [(own_label, own)])
+            else:
+                candidates = [(f'--{n}', sv) for n, sv in surfaces.items()]
+
+            # `opacity` fades the TEXT into whatever is behind it, so the effective
+            # foreground is the token composited at that alpha. A token that clears
+            # 4.5:1 at full strength can fail at 0.75 -- and did.
+            opm = re.search(r'(?<![-\w])opacity:\s*([\d.]+)', body)
+            alpha = float(opm.group(1)) if opm else 1.0
 
             for bg_name, bg in candidates:
                 checked += 1
-                ratio = contrast(fg, bg)
+                eff = over((*fg[:3], alpha), bg) if alpha < 1.0 else fg
+                ratio = contrast(eff, bg)
                 if ratio < MIN_RATIO:
+                    at = f' at opacity {alpha:g}' if alpha < 1.0 else ''
                     failures.append(
-                        f'{theme:5s} L{line:<4d} {sel.strip()[:44]:44s} '
-                        f'color: var(--{m.group(1)}) on {bg_name:24s} {ratio:4.2f}:1  (needs {MIN_RATIO})')
-    return checked, failures
+                        f'{theme:22s} L{line:<4d} {sel.strip()[:40]:40s} '
+                        f'color: {fg_label}{at} on {bg_name:26s} {ratio:4.2f}:1  (needs {MIN_RATIO})')
+    return checked, failures, unresolved
 
 if __name__ == "__main__":
     ok = True
     for path in sys.argv[1:]:
-        checked, failures = check(path)
+        checked, failures, unresolved = check(path)
         print(f'########## {path}  —  {checked} colour/surface pairs checked')
-        if failures:
+        for f in failures:
+            print('  FAIL ', f)
+        for u in unresolved:
+            print('  UNREADABLE ', u, '  <- teach check-contrast.py this form, or use a token')
+        if failures or unresolved:
             ok = False
-            for f in failures:
-                print('  FAIL ', f)
         else:
             print('  all pairs meet 4.5:1')
     sys.exit(0 if ok else 1)
