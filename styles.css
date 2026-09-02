@@ -7,10 +7,14 @@
   --paper: #EDF1F4;
   --card: #FFFFFF;
   --ink: #12202B;
-  --muted: #5A7183;
+  --muted: #516777;
   --rail: #9FB3C0;
   --trace: #0B6E5F;
   --amber: #C8862A;
+  /* --amber is the MARKER colour and stays decorative. A running timestamp is
+     13px text, which needs 4.5:1, and #C8862A on this paper is 2.68:1 -- so text
+     gets its own darker token. Dark mode already clears it at 7.32:1. */
+  --amber-text: #8A5A12;
   --oxide: #B3402B;
 
   --hair: #D5DFE6;
@@ -33,6 +37,7 @@
     --rail: #33505F;
     --trace: #2E9C87;
     --amber: #D89B4A;
+    --amber-text: #D89B4A;
     --oxide: #E07A66;
 
     --hair: #243B49;
@@ -52,6 +57,7 @@
   --rail: #33505F;
   --trace: #2E9C87;
   --amber: #D89B4A;
+  --amber-text: #D89B4A;
   --oxide: #E07A66;
 
   --hair: #243B49;
@@ -575,7 +581,7 @@ body {
 }
 
 .step[data-state="running"][data-settled="true"] > .step-rail > .step-marker { animation: none; }
-.step[data-state="running"] > .step-time { color: var(--amber); }
+.step[data-state="running"] > .step-time { color: var(--amber-text); }
 
 .step[data-state="done"] > .step-rail > .step-marker {
   background: var(--trace);
