@@ -107,6 +107,40 @@ export async function run(a) {
     await evaluate(`_lastTurnId === null && document.getElementById('answerFeedback').textContent === ''`),
     await evaluate(`'_lastTurnId=' + _lastTurnId + ' row=' + JSON.stringify(document.getElementById('answerFeedback').textContent.slice(0,40))`));
 
+  // ── a completion from a superseded run must not touch the new row ───────
+  // Reproduced before the fix: start a thumb on turn 101, begin a new run, render
+  // turn 202, then let the old request finish -- turn 202's buttons disappeared and
+  // the row read "Recorded against turn 101". Both paths are checked, because the
+  // failure path writes into the row too.
+  for (const [label, settle] of [
+    ['success', `release({ok:true, status:200, text:async()=>''})`],
+    ['failure', `release({ok:false, status:500, statusText:'Server Error', text:async()=>'boom'})`],
+  ]) {
+    const out = await evaluate(`
+      let release;
+      window.fetch = () => new Promise(r => { release = v => r(v); });
+      ${a.captureTurn(101)} showAnswer('answer for turn 101');
+      [...document.querySelectorAll('#answerFeedback .fb-btn')].find(b=>/Yes/.test(b.textContent)).click();
+      await new Promise(r => setTimeout(r, 20));
+
+      _resetFeedback();                       // a new run begins
+      ${a.captureTurn(202)} showAnswer('answer for turn 202');
+
+      ${settle};                              // the OLD request finally lands
+      await new Promise(r => setTimeout(r, 250));
+      return JSON.stringify({
+        text: document.querySelector('#answerFeedback .fb-status')?.textContent || '',
+        buttons: document.querySelectorAll('#answerFeedback .fb-btn').length
+      })`);
+    const st = JSON.parse(out);
+    // The invariant is that the new row is UNTOUCHED, so the status must be empty --
+    // not merely "says nothing about turn 101". Asserting the weaker thing passed with
+    // the failure-path guard deleted, because an error message mentions no turn id and
+    // removes no buttons: it just appeared under the new answer as if it were about it.
+    check(`a superseded ${label} leaves the new answer's row untouched`,
+      st.buttons === 2 && st.text === '', JSON.stringify(st));
+  }
+
   // ── layout ──────────────────────────────────────────────────────────────
   await evaluate(`${a.captureTurn(13901)} showAnswer('z');
     [...document.querySelectorAll('#answerFeedback .fb-btn')].find(b=>/No/.test(b.textContent)).click();

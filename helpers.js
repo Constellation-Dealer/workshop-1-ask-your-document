@@ -838,6 +838,17 @@ function _controls() {
   return el;
 }
 
+/**
+ * Is the row still the one this request started against? A `false` here is not a
+ * failure -- the POST landed and the rating is recorded; the user has simply moved on
+ * to another answer, and writing this result over their new row would be a lie about
+ * which turn it belongs to.
+ */
+function _stillOwns(node) {
+  const host = document.getElementById('answerFeedback');
+  return !!host && !!node && host.querySelector('.fb-status') === node;
+}
+
 function _setStatus(text, kind) {
   const el = _feedbackStatus();
   if (!el) return;
@@ -930,6 +941,13 @@ async function _sendFeedback(score, comment, trigger) {
   const turnId = _lastTurnId;
   const buttons = [...host.querySelectorAll('.fb-btn')];
   const field = host.querySelector('.fb-input');
+  // The status node THIS request owns. Everything below happens after an await, and by
+  // then the row may belong to a different answer: start a new run while a thumb is in
+  // flight and the old response would remove the new answer's buttons and report the
+  // old turn's result over them. A reset or a re-render rebuilds these nodes, so node
+  // identity is what says "still mine" -- and it needs no counter anyone must remember
+  // to bump.
+  const owned = _feedbackStatus();
 
   buttons.forEach(b => { b.disabled = true; });
   if (field) field.disabled = true;
@@ -956,6 +974,11 @@ async function _sendFeedback(score, comment, trigger) {
       throw new Error(`${res.status} ${res.statusText}${detail ? ' \u2014 ' + detail.slice(0, 300) : ''}`);
     }
 
+    if (!_stillOwns(owned)) {
+      console.debug(`Feedback for turn ${turnId} recorded, but a newer answer is on screen -- not touching it.`);
+      return;
+    }
+
     // Done: the controls go, and focus moves to the line that says what happened,
     // so a keyboard user is not left on a button that no longer exists.
     _controls()?.replaceChildren();
@@ -964,6 +987,10 @@ async function _sendFeedback(score, comment, trigger) {
       : '\u{1F44E} Recorded against turn ' + turnId + ' and queued for review.', 'fb-ok');
     _feedbackStatus()?.focus();
   } catch (err) {
+    if (!_stillOwns(owned)) {
+      console.debug(`Feedback for turn ${turnId} failed (${err.message}), but a newer answer is on screen -- not touching it.`);
+      return;
+    }
     _setStatus(`Could not record that: ${err.message} \u2014 try again.`, 'fb-err');
     buttons.forEach(b => { b.disabled = false; });
     if (field) field.disabled = false;
