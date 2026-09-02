@@ -1,0 +1,56 @@
+name: checks
+
+# Two checks, both about failures that do not announce themselves.
+#
+# contrast — text that is slightly too faint is never reported as a bug; people
+#   just lose track of what the agent loop is doing, which is the one thing the
+#   page exists to show. Derives the colours it checks FROM the stylesheet, so a
+#   rule written later is covered too.
+#
+# feedback — the thumb under the answer is how a rating reaches the platform's
+#   review queue. If it silently stops posting, the page looks completely fine
+#   and the queue just goes quiet. Driven in a real headless Chrome over CDP,
+#   because the bug this guards against lives in DOM wiring, not in a function.
+#
+# Neither needs a dependency install: ubuntu-latest ships python3, node and Chrome.
+
+on:
+  push:
+    branches: [main, solution]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  contrast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 .github/scripts/check-contrast.py styles.css
+
+  feedback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Serve the app
+        run: |
+          npx --yes http-server . -a 127.0.0.1 -p 5199 -c-1 > /tmp/http.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://127.0.0.1:5199/ && break
+            sleep 1
+          done
+          curl -sf -o /dev/null http://127.0.0.1:5199/ || { echo "server never came up"; cat /tmp/http.log; exit 1; }
+      - name: Start headless Chrome
+        run: |
+          CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser || command -v chromium)"
+          [ -n "$CHROME" ] || { echo "no Chrome on this runner"; exit 1; }
+          "$CHROME" --headless=new --disable-gpu --no-sandbox \
+            --remote-debugging-port=9333 --user-data-dir=/tmp/cdp about:blank > /tmp/chrome.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://127.0.0.1:9333/json/version && break
+            sleep 1
+          done
+          curl -sf -o /dev/null http://127.0.0.1:9333/json/version || { echo "Chrome never exposed CDP"; cat /tmp/chrome.log; exit 1; }
+      - name: Drive the feedback flow
+        env:
+          APP_URL: http://127.0.0.1:5199/
+        run: node .github/scripts/test-feedback.mjs
