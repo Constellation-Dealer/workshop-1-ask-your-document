@@ -291,6 +291,53 @@ async function getMediaStatus(mediaFileId) {
 }
 
 /**
+ * The ingestion statuses that mean UMH is still working on the file.
+ *
+ * Everything NOT in this list is terminal, and that is the point of expressing
+ * it this way round. UMH's status enum is Pending, Processing, Extracting,
+ * Embedding, Completed, Failed, Skipped -- and a poll loop written as
+ * "break on Completed, throw on Failed" hangs forever on Skipped, which is not
+ * a rare edge: UMH returns Skipped for a PDF with no text layer, i.e. a scan.
+ * Most service manuals and invoices a dealership actually holds are scans.
+ *
+ * Waiting only on the in-flight set means a status nobody here has heard of
+ * stops the loop instead of hanging it.
+ */
+const INGESTION_IN_FLIGHT = ['Pending', 'Processing', 'Extracting', 'Embedding'];
+
+/**
+ * Is UMH still ingesting this file? Keep polling while this is true.
+ *
+ * Compared case-insensitively on purpose: the API title-cases the status
+ * ("Skipped") while the database stores it lower ("skipped"), so an exact
+ * match is one serializer change away from hanging the loop again.
+ */
+function isIngestionInFlight(status) {
+  const s = String(status ?? '').toLowerCase();
+  return INGESTION_IN_FLIGHT.some(known => known.toLowerCase() === s);
+}
+
+/**
+ * Explain a terminal status that is not success, so the loop can say something
+ * useful instead of just stopping. Returns null when the file is ready.
+ */
+function explainIngestionStop(status) {
+  const s = String(status ?? '').toLowerCase();
+  if (s === 'completed') return null;
+  if (s === 'skipped') {
+    return `TargetUMH skipped indexing this file (status: ${status}), so there is nothing for the ` +
+      `agent to retrieve. The usual cause is a PDF with no text layer -- a scan. ` +
+      `Try a PDF whose text you can select in a PDF reader.`;
+  }
+  if (s === 'failed') {
+    return `TargetUMH failed to ingest this file (status: ${status}), so no embeddings exist for it. ` +
+      `Check the file is a readable PDF and try the upload again.`;
+  }
+  return `TargetUMH stopped at an unrecognised ingestion status (${status}), so it is not safe to ` +
+    `assume embeddings are ready.`;
+}
+
+/**
  * Chat with the Gateway using SSE streaming.
  *
  * @param {string} message       - The user's question/message

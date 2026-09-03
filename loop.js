@@ -23,20 +23,33 @@ async function runAgenticLoop(file, question) {
   // ── Step 2: Poll until embeddings are ready ───────────────
   addStep('poll', 'Poll until ready', 'Checking ingestion status...', 'waiting');
 
-  while (true) {
-    const status = await getMediaStatus(upload.id);
+  // Wait only while UMH says it is still working. Everything else is terminal.
+  //
+  // Writing it the other way round -- break on Completed, throw on Failed --
+  // leaves Skipped matching neither branch, and Skipped is what UMH returns for
+  // a PDF with no text layer, i.e. a scan. The loop would then spin forever
+  // with `ingestionStatus: Skipped` ticking on screen and no error at all.
+  const deadline = Date.now() + 120000;
+  let status = await getMediaStatus(upload.id);
+
+  while (isIngestionInFlight(status.ingestionStatus)) {
     updateStep('poll', `ingestionStatus: ${status.ingestionStatus}`, 'waiting');
 
-    if (status.ingestionStatus === 'Completed') {
-      break;
-    }
-
-    if (status.ingestionStatus === 'Failed') {
-      throw new Error(`Media ingestion failed for ${upload.id}`);
+    if (Date.now() > deadline) {
+      throw new Error(
+        `TargetUMH is still at ${status.ingestionStatus} after two minutes, so the answer would ` +
+        `have nothing to retrieve. Check the media pipeline before retrying.`
+      );
     }
 
     await sleep(1000);
+    status = await getMediaStatus(upload.id);
   }
+
+  // Not in flight any more, so it either succeeded or it stopped for a reason
+  // worth telling the participant about.
+  const problem = explainIngestionStop(status.ingestionStatus);
+  if (problem) throw new Error(problem);
 
   updateStep('poll', 'Embeddings ready!', 'complete');
 
