@@ -39,6 +39,25 @@ A hands-on exercise where you upload a PDF, wait for it to be indexed, and then 
 > origin at all, so every API call is refused — this is about serving over HTTP, not about which
 > port you pick. Both `http://localhost:3000` and `http://localhost:5173` are allowlisted.
 
+## The PDF you bring
+
+### 🔴 One corpus, everyone's documents
+
+**Everyone in this workshop signs in as the same dealer, and every upload lands in the same shared
+corpus.** There is no per-person partition in this exercise. Whatever you upload can be retrieved
+and quoted back, word for word, in the answer to somebody else's question — and theirs in yours.
+
+So: **do not upload anything you would not hand round the room.** No customer data, no contracts,
+no internal financials, nothing under NDA.
+
+What works well instead: an **equipment manual**, a **spec sheet**, or any **public PDF** you like.
+The exercise only needs a document with real text in it, and one you know well enough to tell a
+good answer from a plausible one.
+
+Naming the file distinctively — `compact-tractor-manual-yourname.pdf` — makes it easier to ask a
+question you know only your document answers. That is a **retrieval aid, not a control**: it helps
+you steer your own question, it keeps nobody else out.
+
 ## File Structure
 
 ```
@@ -75,30 +94,40 @@ This workshop's is **`workshop-1-answer-style`**. It asks for a short paragraph 
 line naming the document the answer
 came from, and tells the model to say so plainly when the documents do not contain the answer.
 
-### 🔴 One skill, everyone's answers
+### 🔴 One skill, everyone's answers — so read it, do not edit it
 
-**There is one copy, shared by every participant in this workshop.** Editing it changes the answers
-*everyone* gets, immediately — including the person mid-sentence next to you. That is not a bug to
-route around; it is what a system skill is. Treat it the way you would a shared environment: say
-what you are doing before you save.
+**There is one copy, shared by every participant in this workshop, and there is no reset.** An edit
+changes the answers *everyone* gets, immediately. That is not a bug to route around; it is what a
+system skill is.
 
-Version history is kept, so a bad edit is recoverable — but the recovery is shared too.
+This exercise is pre-work: people do it alone, over several days, with nobody to announce a change
+to. Edit the skill on the Tuesday and the person who runs the exercise on the Wednesday gets answers
+shaped by your experiment with no way of knowing that is what happened — they will read it as how
+the platform behaves. **So for the pre-work, treat it as read-only: open it, read the markdown, see
+what it is doing to the answers you are getting, and do not save or publish.**
 
-### Seeing and editing it
+Version history is kept, so a bad edit is recoverable — but only by somebody who notices, and
+nobody working through this alone will.
+
+### Seeing it
 
 1. Open <https://dev-dealeriq.csidealer.com>.
 2. Sign in with the **email and password you were sent** — the same credential that opens the
    Champion Portal and the one in your `.env`. Use the email/password form, not *Sign in with
    Microsoft*.
-3. Go to **Skills** and find this workshop's. Your account is scoped to the workshop, so a skill
-   belonging to another product will refuse your changes rather than accept them quietly.
-4. Open `workshop-1-answer-style`. The markdown you see is exactly what shapes your answers.
-5. Edit, save, then **publish** — an unpublished edit changes nothing. Re-run your loop and the
-   answers change shape.
+3. Go to **Skills** and find this workshop's. Your account is scoped to the workshop, so the list
+   is short.
+4. Open `workshop-1-answer-style` and read it. The markdown you see is exactly what shapes your
+   answers — the length, the `Source:` line, what to do when the documents do not contain the
+   answer. Then leave it as you found it.
 
 This one is **published already**, so it is live for you from the start.
 
-### Things worth trying
+### On the day: things worth trying
+
+Save these for the live session, where you can say "I am about to change the skill" out loud before
+you save it, and say when you have put it back. Editing is edit, save, then **publish** — an
+unpublished edit changes nothing.
 
 - Delete the trailing `- workshop-1-answer-style` line and re-run. Nothing marks the answers any
   more, and you cannot tell whether the skill applied — which is why that line is there.
