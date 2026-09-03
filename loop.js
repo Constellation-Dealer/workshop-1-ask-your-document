@@ -24,8 +24,15 @@ async function runAgenticLoop(file, question) {
   // TODO:
   // - add the poll step to the trace
   // - loop on getMediaStatus(upload.id)
-  // - break on Completed, throw on Failed, otherwise sleep(1000)
+  // - keep waiting only while isIngestionInFlight(status.ingestionStatus),
+  //   sleep(1000) between checks, and give the loop a deadline
+  // - anything not in flight is terminal: Completed means ready, and
+  //   explainIngestionStop(...) tells you what to throw for the rest
   // - mark the step complete when embeddings are ready
+  //
+  // Do NOT write `break on Completed, throw on Failed`. UMH also returns
+  // Skipped -- for a PDF with no text layer, i.e. a scan -- and that matches
+  // neither branch, so the loop spins forever with no error on screen.
 
 
   // ── Step 3: Ask the Gateway ────────────────────────────────

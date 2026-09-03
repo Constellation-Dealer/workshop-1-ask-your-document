@@ -56,7 +56,10 @@ ask-your-document/
 
 Open `loop.js` and look for the `TODO: YOUR CODE HERE` comments. Step 1 (Upload) is done for you as an example. You fill in Steps 2-4 (~20 lines total):
 
-1. **Polling loop** — check ingestion status, wait, repeat until embeddings are ready
+1. **Polling loop** — check ingestion status, wait, repeat until embeddings are ready.
+   Wait only while `isIngestionInFlight(...)` is true; every other status is terminal.
+   Bring a PDF whose text you can select in a reader — TargetUMH answers `Skipped` for a
+   scan with no text layer, and there is then nothing for the agent to retrieve.
 2. **Ask the Gateway** — send your question to `chatWithGateway()` with SSE callbacks that render each tool call the LLM agent makes
 3. **Show the answer** — display the Gateway's composed response
 
