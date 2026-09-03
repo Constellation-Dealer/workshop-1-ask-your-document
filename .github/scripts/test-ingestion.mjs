@@ -13,10 +13,11 @@ await run({
   // Returns three things about the run:
   //   outcome       'resolved' | 'rejected: …' | 'TIMEOUT'
   //   answered      did the answer actually reach the page
-  //   unimplemented did the loop never even create a poll step — which is the
-  //                 skeleton's OWN test for "steps 2-4 are still TODO"
-  //                 (loop.js: `if (!document.getElementById('step-poll'))`), so
-  //                 the exemption tracks the code rather than a branch name.
+  //   unimplemented did the skeleton render its own "Not Implemented Yet" step
+  //                 — so the exemption tracks the code rather than a branch
+  //                 name, and is a POSITIVE marker rather than an inference
+  //                 from a missing poll step
+  //   polled        did a poll step ever appear, i.e. did the loop really poll
   //
   // sleep() is shortened so a loop polling once a second does not need a
   // ten-second deadline to prove that it terminates.
@@ -52,6 +53,12 @@ await run({
 
     Date.now = realNow;
     showAnswer = realShowAnswer;
-    const unimplemented = !document.getElementById('step-poll');
-    return { outcome, answered, unimplemented };`,
+
+    // POSITIVE identification of the stub, not the absence of a poll step: the
+    // skeleton renders its own "Not Implemented Yet" step (loop.js calls
+    // addStep('todo', ...)). Inferring it from a missing poll step would excuse
+    // a solution that returns before it ever polls.
+    const unimplemented = !!document.getElementById('step-todo');
+    const polled = !!document.getElementById('step-poll');
+    return { outcome, answered, unimplemented, polled };`,
 });
