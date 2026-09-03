@@ -6,11 +6,15 @@
 //    property, not a list of known-bad values, because the bug it guards was
 //    exactly a list that did not mention Skipped.
 //
-// 2. runAgenticLoop must SETTLE when the status never becomes Completed. It may
-//    resolve or reject; what it must not do is spin. The unimplemented skeleton
-//    on `main` rejects immediately and passes this, and the finished loop on
-//    `solution` passes only if it treats a terminal status as terminal. So the
-//    same check runs on both branches with nothing skipped.
+// 2. runAgenticLoop must SETTLE, whatever the status does — resolve or reject,
+//    just never spin. The unimplemented skeleton rejects immediately and passes,
+//    and the finished loop passes only if it treats a terminal status as
+//    terminal AND keeps a deadline over a status that never leaves the in-flight
+//    set. Where ingestion really did complete, an implemented loop must also
+//    SUCCEED and render the answer — "settled" alone would accept a loop that
+//    threw on a perfectly good file. The skeleton is exempted from that by its
+//    own condition (it never created a poll step), not by a branch name, so the
+//    one check still runs on both branches with nothing skipped.
 import { goto, evaluate, consoleLogs, close } from './cdp.mjs';
 
 const APP_URL = process.env.APP_URL || 'http://127.0.0.1:5199/';
@@ -55,30 +59,51 @@ export async function run({ readyExpr, settleExpr }) {
 
   // ── 3. the loop always settles, whatever the status does ────────────────
   //
-  // Both the stuck cases AND the happy path: a loop that never re-polls, or
-  // one that re-polls forever after Completed, hangs just as silently as the
-  // Skipped bug. The assertion is only "it settled", which the unimplemented
-  // skeleton satisfies by rejecting -- so this runs on both branches.
+  // "Settles" (resolve OR reject, just never spin) is the only assertion that
+  // can hold for BOTH the unimplemented skeleton and the finished solution, so
+  // it is what makes one check cover both branches with nothing skipped.
+  //
+  // On its own it is too weak, though: a loop that wrongly REJECTS a perfectly
+  // good Completed file also settles. So every run reports whether the loop is
+  // even implemented -- structurally, by whether it got as far as creating a
+  // poll step -- and the Completed cases below demand a real success from any
+  // loop that is.
   const sequences = [
-    [['Skipped'], 'ingestion stays Skipped'],
-    [['Failed'], 'ingestion stays Failed'],
-    [['Quarantined'], 'ingestion stays at an unknown status'],
-    [['Completed'], 'ingestion is already Completed'],
-    [['Pending', 'Extracting', 'Embedding', 'Completed'], 'ingestion works through to Completed'],
+    [['Skipped'], 'ingestion stays Skipped', {}],
+    [['Failed'], 'ingestion stays Failed', {}],
+    [['Quarantined'], 'ingestion stays at an unknown status', {}],
+    // Permanently in flight. Without a deadline the loop is CORRECT to keep
+    // waiting and will therefore spin forever, so this is the case that makes
+    // the deadline load-bearing rather than decorative. The clock is
+    // fast-forwarded because a two-minute budget cannot be waited out here.
+    [['Pending'], 'ingestion never leaves Pending', { fastClock: true }],
+    [['Completed'], 'ingestion is already Completed', { expectSuccess: true }],
+    [['Pending', 'Extracting', 'Embedding', 'Completed'], 'ingestion works through to Completed', { expectSuccess: true }],
   ];
-  for (const [statuses, label] of sequences) {
-    const outcome = await evaluate(settleExpr(statuses));
-    check(`runAgenticLoop settles when ${label}`, outcome !== 'TIMEOUT',
-      outcome === 'TIMEOUT' ? 'it never settled — the poll loop is spinning' : String(outcome).slice(0, 110));
+
+  let sawImplemented = false;
+  for (const [statuses, label, opts] of sequences) {
+    const r = await evaluate(settleExpr(statuses, opts));
+    const settled = r.outcome !== 'TIMEOUT';
+    check(`runAgenticLoop settles when ${label}`, settled,
+      settled ? String(r.outcome).slice(0, 105) : 'it never settled — the poll loop is spinning');
+    if (!r.unimplemented) sawImplemented = true;
+
+    // A loop that exists must SUCCEED on a file that really did finish, and put
+    // the answer on the page. Only a loop that never started polling is excused,
+    // and that exemption is the skeleton's own condition, not a branch name.
+    if (opts.expectSuccess && settled) {
+      const ok = r.unimplemented || (r.outcome === 'resolved' && r.answered === true);
+      check(`...and succeeds, rendering the answer, when ${label}`, ok,
+        r.unimplemented
+          ? 'loop not implemented on this branch — exempt'
+          : `outcome=${r.outcome} answered=${r.answered}`);
+    }
   }
 
-  // Whenever the loop DOES run to completion, the answer has to reach the page.
-  // Scoped to "if it resolved" so the skeleton, which rejects, is not asked to
-  // render anything -- but a finished loop that silently drops the answer fails.
-  const happy = await evaluate(settleExpr(['Pending', 'Completed'], { trackAnswer: true }));
-  check('a loop that runs to completion renders the answer',
-    happy.outcome !== 'resolved' || happy.answered === true,
-    `outcome=${happy.outcome} answered=${happy.answered}`);
+  // Say which branch this was, so a run that silently exempted everything is
+  // visible in the log rather than reading as a clean pass.
+  console.log(`  note  loop is ${sawImplemented ? 'IMPLEMENTED — success assertions applied' : 'the unimplemented skeleton — success assertions exempt'}`);
 
   const errs = consoleLogs().filter(l => l.startsWith('[pageerror]'));
   if (errs.length) console.log('\npage errors:\n' + errs.join('\n'));
