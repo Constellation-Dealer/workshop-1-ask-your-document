@@ -65,6 +65,52 @@ Open `loop.js` and look for the `TODO: YOUR CODE HERE` comments. Step 1 (Upload)
 
 The key difference from a traditional RAG loop: you do NOT call `vector_search_media` or `get_document_chunks` yourself. The Gateway's LLM agent decides which tools to call and calls them for you. You just watch the SSE events stream in.
 
+## The skill shaping these answers
+
+Every answer you get in this exercise passes through a **system skill** — a short markdown file,
+stored on the platform, prepended to the model's instructions. It is not part of this repo and you
+do not need to touch it to finish the exercise. It is here because it is worth seeing.
+
+This workshop's is **`workshop-1-answer-style`**. It asks for a short paragraph plus a `Source:`
+line naming the document the answer
+came from, and tells the model to say so plainly when the documents do not contain the answer.
+
+### 🔴 One skill, everyone's answers
+
+**There is one copy, shared by every participant in this workshop.** Editing it changes the answers
+*everyone* gets, immediately — including the person mid-sentence next to you. That is not a bug to
+route around; it is what a system skill is. Treat it the way you would a shared environment: say
+what you are doing before you save.
+
+Version history is kept, so a bad edit is recoverable — but the recovery is shared too.
+
+### Seeing and editing it
+
+1. Open <https://dev-dealeriq.csidealer.com>.
+2. Sign in with the **email and password you were sent** — the same credential that opens the
+   Champion Portal and the one in your `.env`. Use the email/password form, not *Sign in with
+   Microsoft*.
+3. Go to **Skills** and find this workshop's. Your account is scoped to the workshop, so a skill
+   belonging to another product will refuse your changes rather than accept them quietly.
+4. Open `workshop-1-answer-style`. The markdown you see is exactly what shapes your answers.
+5. Edit, save, then **publish** — an unpublished edit changes nothing. Re-run your loop and the
+   answers change shape.
+
+This one is **published already**, so it is live for you from the start.
+
+### Things worth trying
+
+- Delete the trailing `- workshop-1-answer-style` line and re-run. Nothing marks the answers any
+  more, and you cannot tell whether the skill applied — which is why that line is there.
+- Ask for something the tools cannot answer, then change the instruction about what to do when the
+  answer is not available. That one line is the difference between a useful assistant and a
+  confident wrong one.
+- Look at **version history**. Every save is a version with an author, which is how you find out
+  who changed the room's answers.
+
+> At most **two** skills are injected into any one request, which is why only one of the three
+> workshop skills is published at a time. If yours is a draft, publishing it is step one.
+
 ## Configuration
 
 All configuration is in `.env`. See `.env.example` for the full list of values including API endpoints, credentials, and dealer context.
