@@ -675,6 +675,24 @@ function _renderRetrievalScope(entity, agentToolCalls) {
   // one the card has no standing to make it about.
   const uncertain = unknown.length > 0;
 
+  // Every universal claim on this card goes through here, and a branch cannot
+  // state the confident half without writing down what it degrades to.
+  //
+  // Making it smaller is not one edit. The headline, the body and the aside
+  // that explains the qualification are three separate sentences, and the
+  // first version of this reduced the headline while the body still said
+  // "nothing here read anybody else's documents" — a contradiction three lines
+  // apart on the same card, in the one place a participant looks for the
+  // truth. `degraded` records that a claim was actually withdrawn, so the
+  // explanation appears exactly where that happened rather than being asserted
+  // on every card whether or not anything was given up.
+  let degraded = false;
+  const claim = (confident, qualified) => {
+    if (!uncertain) return confident;
+    degraded = true;
+    return qualified;
+  };
+
   const steeringNote =
     `Your loop is fine — this is what "steered, not enforced" looks like. The entity is a ` +
     `request to the agent, not a filter it has to obey.`;
@@ -691,9 +709,9 @@ function _renderRetrievalScope(entity, agentToolCalls) {
 
   if (verdict === 'scoped') {
     parts.status = uncertain ? 'note' : 'complete';
-    parts.headline = uncertain
-      ? `The searches this page can account for carried your entity — ${counted}.`
-      : `Every corpus search carried your entity — ${counted}.`;
+    parts.headline = claim(
+      `Every corpus search carried your entity — ${counted}.`,
+      `The searches this page can account for carried your entity — ${counted}.`);
     parts.body = scoped.map(_describeCall).join('\n\n');
   } else if (verdict === 'mixed') {
     parts.headline = `MIXED — only some of the retrieval was yours: ${counted} carried it.`;
@@ -704,16 +722,25 @@ function _renderRetrievalScope(entity, agentToolCalls) {
     parts.body = `${steeringNote}\n\n${wideList}`;
   } else if (verdict === 'direct') {
     parts.status = uncertain ? 'note' : 'complete';
-    parts.headline = uncertain
-      ? 'The reads this page can account for named your document by id — no corpus search among them.'
-      : 'No corpus search was needed — the agent read your document by id.';
-    parts.body = `Naming the file is narrower than the entity could ever have made it, so ` +
-      `nothing here read anybody else's documents.\n\n` +
-      named.map(_describeCall).join('\n\n');
+    parts.headline = claim(
+      'No corpus search was needed — the agent read your document by id.',
+      'The reads this page can account for named your document by id — no corpus search among them.');
+    parts.body = claim(
+      `Naming the file is narrower than the entity could ever have made it, so nothing here ` +
+        `read anybody else's documents.`,
+      `Naming the file is narrower than the entity could ever have made it — but that is a ` +
+        `statement about the read below, not about the turn. Something else ran that this page ` +
+        `cannot account for, so whether anybody else's documents were read is not settled here.`) +
+      '\n\n' + named.map(_describeCall).join('\n\n');
   } else {
     parts.status = 'note';
+    // With no calls at all there is nothing to be unrecognised, so that arm
+    // cannot be reached while `uncertain` — it needs no qualified form.
     parts.headline = calls.length
-      ? 'No call this page recognises as retrieval ran, so there is nothing to judge.'
+      ? claim(
+          'No call this page recognises as retrieval ran, so there is nothing to judge.',
+          'No call this page recognises as retrieval ran — and one it does not recognise may ' +
+            'have, so this turn is not one the card can clear.')
       : 'The agent made no tool calls at all this turn, so nothing was retrieved.';
     parts.body = '';
   }
@@ -728,8 +755,11 @@ function _renderRetrievalScope(entity, agentToolCalls) {
   const unknownList = unknown.length
     ? `\n\nNOT RECOGNISED — this page cannot tell whether ` +
       `${unknown.length === 1 ? 'this call read' : 'these calls read'} the corpus, so ` +
-      `${unknown.length === 1 ? 'it is' : 'they are'} neither counted nor ruled out. That is why ` +
-      `the line above says what it can account for rather than "every":\n\n` +
+      `${unknown.length === 1 ? 'it is' : 'they are'} neither counted nor ruled out.` +
+      // Only where a claim was actually given up. A MIXED or unscoped headline
+      // never asserted anything universal, so this call took nothing from it,
+      // and saying otherwise describes a headline that branch does not have.
+      `${degraded ? ' That is why the line above reports only what it can account for.' : ''}\n\n` +
       unknown.map(_describeCall).join('\n\n')
     : '';
 
