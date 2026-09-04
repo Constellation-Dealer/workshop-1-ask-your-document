@@ -579,13 +579,28 @@ function _carriesEntity(call, entity) {
 //  guess about what it is for — which is why it can retire a call to `aside`.
 //  Absent or empty, it decides nothing and the call stays `unknown`.
 // ═══════════════════════════════════════════════════════════════
-const RETRIEVAL_TOOLS = {
+// A lookup table keyed by a name the AGENT chose, so it must not answer for a
+// name it does not hold. An object literal inherits all twelve members of
+// Object.prototype, and `{...}['constructor']` is a truthy function — enough
+// for the role lookup below to return something that is none of the four
+// buckets, so the call falls out of every one of them and stops existing:
+// uncounted, unlisted, and NOT `unknown` either, which is the one that would
+// have qualified the verdict. A turn holding an unaccounted call then printed
+// the confident green. `constructor`, `toString`, `valueOf` and `__proto__`
+// are the obvious names; the list is twelve long and grows with the language.
+//
+// Guarded here rather than at each call site, because a guard at the call site
+// is a rule someone has to remember for the next table. With no prototype
+// there is nothing to inherit and plain indexing is safe by construction.
+const _nameKeyedTable = entries => Object.assign(Object.create(null), entries);
+
+const RETRIEVAL_TOOLS = _nameKeyedTable({
   vector_search_media: 'corpus',
   search_media: 'corpus',
   get_media_for_entity: 'corpus',
   get_document_chunks: 'pinned',
   get_media_metadata: 'pinned'
-};
+});
 
 // Known, and known not to be retrieval. Being ON this list is what lets a call
 // sit beside a green verdict without weakening it, so a name goes here only
@@ -611,10 +626,13 @@ const MEDIA_SERVER = 'media';
 function _retrievalRole(call) {
   const toolName = String((call && call.toolName) || '');
   const args = (call && call.arguments) || {};
+  // Exact buckets only. `if (role)` would pass anything truthy through as a
+  // role of its own, which is how an inherited property became a fifth bucket
+  // that no branch of the card reads.
   const role = RETRIEVAL_TOOLS[toolName];
 
   if (role === 'pinned') return String(args.mediaFileId ?? '').trim() ? 'pinned' : 'unknown';
-  if (role) return role;
+  if (role === 'corpus') return 'corpus';
 
   if (NON_RETRIEVAL_TOOLS.includes(toolName)) return 'aside';
 
@@ -876,13 +894,18 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
 // something to SAY and no verdict to give — the Retrieval scope card when the
 // agent ran nothing this page recognises as retrieval. Green would claim a
 // success and red would accuse a run that may well have been fine.
-const STEP_STATES = {
+// Same shape as RETRIEVAL_TOOLS. Every key reaching it is a literal this file
+// wrote, so it is not reachable the way that one was — but it is one caller
+// away from being, and `_visualState('constructor')` would return a function
+// where a CSS class belongs. Built the same way so the question does not have
+// to be re-asked each time a state is added.
+const STEP_STATES = _nameKeyedTable({
   thinking: 'running',
   waiting: 'running',
   complete: 'done',
   error: 'failed',
   note: 'idle'
-};
+});
 
 // _steps is keyed by a UNIQUE occurrence key and iterated in insertion order,
 // so every loop over it walks the trace chronologically. _byId maps the LOGICAL
