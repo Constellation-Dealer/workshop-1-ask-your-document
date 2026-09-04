@@ -175,6 +175,12 @@ const unknownTool = {
   toolName: 'summarise_service_history', serverName: 'media',
   arguments: { dealerGuid: 'd', horizonDays: 90, includeDrafts: true }
 };
+// Unrecognised, and with no serverName to retire it to `aside` either. Absent
+// evidence is not evidence of absence: it stays uncertain rather than cleared.
+const unknownToolNoServer = {
+  toolName: 'summarise_service_history',
+  arguments: { dealerGuid: 'd', horizonDays: 90 }
+};
 // A recognised by-id read that did not actually name a document — it carries
 // the PLURAL key, the same near-miss that fooled the old rule. Recognising the
 // tool is not enough; the call has to have done what the tool is for, so this
@@ -257,7 +263,7 @@ check('a NON-SEARCH media tool does not count as an unscoped corpus read',
   !/list_media_entity_values[\s\S]*WITHOUT/.test(withOtherTools.card?.text || ''),
   withOtherTools.card?.text?.slice(0, 260));
 check('a tool on another server does not count as an unscoped corpus read',
-  (withOtherTools.card?.text || '').includes('1 of 1 corpus searches carried it'),
+  (withOtherTools.card?.text || '').includes('1 of 1 corpus searches'),
   withOtherTools.card?.text?.slice(0, 200));
 
 // Each on its own too. In the combined fixture above these three share one
@@ -282,25 +288,22 @@ const withinOneFile = await chatRun('First.Last@constellationdealer.com',
   [mediaScoped, mediaSearchWithinOneFile]);
 check('searching WITHIN one already-chosen document is not a corpus search',
   withinOneFile.card?.state === 'done' &&
-  (withinOneFile.card?.text || '').includes('1 of 1 corpus searches carried it'),
+  (withinOneFile.card?.text || '').includes('1 of 1 corpus searches'),
   `${withinOneFile.card?.state} — ${withinOneFile.card?.text?.slice(0, 200)}`);
 
-// ── 5b. calls that are not retrieval at all ──────────────────────────────────
-// Each of these is a real TargetUMH operation that an argument-shape rule got
-// wrong. They must not move the verdict in EITHER direction, so each is checked
-// twice: alongside a correctly scoped run (must stay green) and on its own
-// (must not be green, and must not be accused).
+// ── 5b. known-not-retrieval leaves a green verdict intact ────────────────────
+// These are real TargetUMH operations we can NAME and can say did not search
+// the corpus. Beside a scoped run they must leave a clean, confident "every".
 for (const [label, fixture] of [
   ['list_media_entity_values({ entityType })', mediaNonSearch],
   ['list_media_entity_values({ entityType, tags })', mediaNonSearchTagged],
   ['generate_embeddings({ mediaFileIds })', mediaProcessing],
-  ['an unrecognised tool', unknownTool],
-  ['a by-id read that named no document', pinnedWithoutAnId]
+  ['a tool the Gateway ran on another server', otherServer]
 ]) {
   const alongside = await chatRun('First.Last@constellationdealer.com', [mediaScoped, fixture]);
-  check(`${label} does not turn a scoped run red`,
+  check(`${label} leaves a CONFIDENT green beside a scoped search`,
     alongside.card?.state === 'done' &&
-    (alongside.card?.text || '').includes('1 of 1 corpus searches carried it'),
+    /Every corpus search carried your entity/.test(alongside.card?.text || ''),
     `${alongside.card?.state} — ${alongside.card?.text?.slice(0, 170)}`);
   check(`${label} is shown but not counted`,
     /not counted either way/i.test(alongside.card?.text || '') &&
@@ -312,6 +315,55 @@ for (const [label, fixture] of [
     alone.card?.state !== 'done' && alone.card?.state !== 'failed' && !accused(alone.card),
     `${alone.card?.state} — ${alone.card?.text?.slice(0, 170)}`);
 }
+
+// ── 5c. an UNRECOGNISED call costs the card its "every" ──────────────────────
+// The distinction 5b is missing on its own. A tool we cannot name, running
+// where the media tools run, might have searched wide — we do not know. So the
+// card may not make a universal claim about the turn. Not red: an unrecognised
+// call is no more evidence of a wide search than of a scoped one. Qualified.
+for (const [label, fixture] of [
+  ['an unrecognised tool', unknownTool],
+  ['an unrecognised tool with no serverName', unknownToolNoServer],
+  ['a by-id read that named no document', pinnedWithoutAnId]
+]) {
+  const alongside = await chatRun('First.Last@constellationdealer.com', [mediaScoped, fixture]);
+  check(`${label} does NOT let the card claim "every"`,
+    !/Every corpus search/.test(alongside.card?.text || '') &&
+    alongside.card?.state !== 'done',
+    `${alongside.card?.state} — ${alongside.card?.text?.slice(0, 170)}`);
+  check(`${label} still reports what WAS verified`,
+    /can account for carried your entity/.test(alongside.card?.text || '') &&
+    (alongside.card?.text || '').includes('1 of 1 corpus searches'),
+    alongside.card?.text?.slice(0, 200));
+  check(`${label} is named, and named as unrecognised rather than cleared`,
+    /NOT RECOGNISED/.test(alongside.card?.text || '') &&
+    (alongside.card?.text || '').includes(fixture.toolName),
+    alongside.card?.text?.slice(0, 260));
+  check(`${label} does not make the turn red`,
+    alongside.card?.state !== 'failed' && !accused(alongside.card), alongside.card?.state);
+
+  const alone = await chatRun('First.Last@constellationdealer.com', [fixture]);
+  check(`${label} alone is neither green nor an accusation`,
+    alone.card?.state !== 'done' && alone.card?.state !== 'failed' && !accused(alone.card),
+    `${alone.card?.state} — ${alone.card?.text?.slice(0, 170)}`);
+}
+
+// The two facts must READ differently. If these cards are the same, the
+// distinction between "we know it did not search" and "we cannot tell" is not
+// implemented, whatever the individual assertions above say.
+const withKnownAside = await chatRun('First.Last@constellationdealer.com', [mediaScoped, mediaProcessing]);
+const withUnknown = await chatRun('First.Last@constellationdealer.com', [mediaScoped, unknownTool]);
+check('a known-not-retrieval aside and an unrecognised call produce DIFFERENT cards',
+  withKnownAside.card?.text !== withUnknown.card?.text &&
+  withKnownAside.card?.state !== withUnknown.card?.state,
+  `${withKnownAside.card?.state} vs ${withUnknown.card?.state}`);
+
+// A by-id run makes a universal claim too, and loses it the same way.
+const directWithUnknown = await chatRun('First.Last@constellationdealer.com', [mediaByFileId, unknownTool]);
+check('a read-by-id turn also stops claiming "no corpus search was needed"',
+  !/No corpus search was needed/.test(directWithUnknown.card?.text || '') &&
+  directWithUnknown.card?.state !== 'done' && directWithUnknown.card?.state !== 'failed',
+  `${directWithUnknown.card?.state} — ${directWithUnknown.card?.text?.slice(0, 170)}`);
 
 // The neutral card is a FINISHED step, not one left ticking.
 //

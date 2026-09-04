@@ -561,9 +561,23 @@ function _carriesEntity(call, entity) {
 //    pinned — returns content from documents the caller already NAMED. Narrower
 //             than the entity could make it; nothing left to narrow.
 //
-//  Not here on purpose: generate_embeddings (processing, not retrieval),
-//  list_media_entity_values (reads the entity vocabulary, not documents),
-//  update_media_entity and upload_customer_document (writes).
+//  And everything else splits in TWO, because "we did not count it" hides two
+//  very different facts:
+//
+//    aside   — we know this tool, and we know it did not search the corpus.
+//              Processing, vocabulary lookups, writes, and anything the Gateway
+//              ran on another server, which cannot have read this dealer's
+//              media at all. These take nothing away from a green verdict.
+//    unknown — a tool name this page has never seen, running where the media
+//              tools run. We do NOT know it did not search wide. It removes the
+//              card's standing to say "EVERY corpus search carried your
+//              entity", because there is a call in the turn it cannot account
+//              for. Not evidence of a wide search; not evidence of a scoped
+//              one. Uncertainty, and the card says so instead of claiming.
+//
+//  serverName is a fact the Gateway supplies about where a call ran, not a
+//  guess about what it is for — which is why it can retire a call to `aside`.
+//  Absent or empty, it decides nothing and the call stays `unknown`.
 // ═══════════════════════════════════════════════════════════════
 const RETRIEVAL_TOOLS = {
   vector_search_media: 'corpus',
@@ -573,23 +587,41 @@ const RETRIEVAL_TOOLS = {
   get_media_metadata: 'pinned'
 };
 
+// Known, and known not to be retrieval. Being ON this list is what lets a call
+// sit beside a green verdict without weakening it, so a name goes here only
+// when we can say what it does instead.
+const NON_RETRIEVAL_TOOLS = [
+  'generate_embeddings',      // processing
+  'list_media_entity_values', // reads the entity vocabulary, not documents
+  'update_media_entity',      // write
+  'upload_customer_document'  // write
+];
+
+const MEDIA_SERVER = 'media';
+
 /**
- * What this call did for the answer: 'corpus', 'pinned', or null for
- * "not recognised as retrieval", which is the neutral bucket.
+ * What this call did for the answer: 'corpus', 'pinned', 'aside' (known, and
+ * known not to have searched), or 'unknown' (cannot be accounted for).
  *
- * A pinned tool that did not actually name a document falls back to neutral
- * rather than being assumed — the exact key `mediaFileId`, never a pattern,
- * because `mediaFileIds` is a different parameter belonging to a tool that is
- * not retrieval at all.
+ * A pinned tool that did not actually name a document does NOT fall through to
+ * `aside` — it becomes `unknown`, because a by-id read with no id is a call we
+ * cannot explain. The key is the exact `mediaFileId`, never a pattern, since
+ * `mediaFileIds` belongs to a tool that is not retrieval at all.
  */
 function _retrievalRole(call) {
-  const role = RETRIEVAL_TOOLS[String((call && call.toolName) || '')];
-  if (!role) return null;
-
+  const toolName = String((call && call.toolName) || '');
   const args = (call && call.arguments) || {};
-  if (role === 'pinned' && !String(args.mediaFileId ?? '').trim()) return null;
+  const role = RETRIEVAL_TOOLS[toolName];
 
-  return role;
+  if (role === 'pinned') return String(args.mediaFileId ?? '').trim() ? 'pinned' : 'unknown';
+  if (role) return role;
+
+  if (NON_RETRIEVAL_TOOLS.includes(toolName)) return 'aside';
+
+  const server = String((call && call.serverName) || '').trim().toLowerCase();
+  if (server && server !== MEDIA_SERVER) return 'aside';
+
+  return 'unknown';
 }
 
 function _describeCall(call) {
@@ -623,11 +655,11 @@ function _renderRetrievalScope(entity, agentToolCalls) {
   const calls = Array.isArray(agentToolCalls) ? agentToolCalls : [];
   const asked = `${entity.entityType} / ${entity.entityId}`;
 
-  // Sort once, by the rule above. Every call lands in exactly one of these
-  // three, and only the first two can move the verdict.
+  // Sort once, by the rule above. Every call lands in exactly one of these four.
   const searches = calls.filter(call => _retrievalRole(call) === 'corpus');
   const named = calls.filter(call => _retrievalRole(call) === 'pinned');
-  const unclassified = calls.filter(call => _retrievalRole(call) === null);
+  const asides = calls.filter(call => _retrievalRole(call) === 'aside');
+  const unknown = calls.filter(call => _retrievalRole(call) === 'unknown');
 
   const scoped = searches.filter(call => _carriesEntity(call, entity));
   const wide = searches.filter(call => !_carriesEntity(call, entity));
@@ -637,13 +669,19 @@ function _renderRetrievalScope(entity, agentToolCalls) {
       ? (wide.length === 0 ? 'scoped' : scoped.length === 0 ? 'unscoped' : 'mixed')
       : (named.length > 0 ? 'direct' : 'nothing');
 
+  // A call we cannot account for does not make the turn bad — it makes the
+  // card's claim smaller. "Every corpus search carried your entity" is a
+  // universal claim, and a turn holding retrieval this page cannot classify is
+  // one the card has no standing to make it about.
+  const uncertain = unknown.length > 0;
+
   const steeringNote =
     `Your loop is fine — this is what "steered, not enforced" looks like. The entity is a ` +
     `request to the agent, not a filter it has to obey.`;
 
   // One count, read by every branch below, so the number can never disagree
   // with the list of calls printed under it.
-  const counted = `${scoped.length} of ${searches.length} corpus searches carried it`;
+  const counted = `${scoped.length} of ${searches.length} corpus searches`;
   const wideList = `Went out WITHOUT your entity — these read the whole shared corpus:\n\n` +
     wide.map(_describeCall).join('\n\n');
 
@@ -652,19 +690,23 @@ function _renderRetrievalScope(entity, agentToolCalls) {
   const parts = { headline: '', body: '', status: 'error' };
 
   if (verdict === 'scoped') {
-    parts.status = 'complete';
-    parts.headline = `Every corpus search carried your entity — ${counted}.`;
+    parts.status = uncertain ? 'note' : 'complete';
+    parts.headline = uncertain
+      ? `The searches this page can account for carried your entity — ${counted}.`
+      : `Every corpus search carried your entity — ${counted}.`;
     parts.body = scoped.map(_describeCall).join('\n\n');
   } else if (verdict === 'mixed') {
-    parts.headline = `MIXED — only some of the retrieval was yours: ${counted}.`;
+    parts.headline = `MIXED — only some of the retrieval was yours: ${counted} carried it.`;
     parts.body = `${steeringNote}\n\n${wideList}\n\nCarried it:\n\n` +
       scoped.map(_describeCall).join('\n\n');
   } else if (verdict === 'unscoped') {
-    parts.headline = `The agent did NOT pass it — ${counted}.`;
+    parts.headline = `The agent did NOT pass it — ${counted} carried it.`;
     parts.body = `${steeringNote}\n\n${wideList}`;
   } else if (verdict === 'direct') {
-    parts.status = 'complete';
-    parts.headline = 'No corpus search was needed — the agent read your document by id.';
+    parts.status = uncertain ? 'note' : 'complete';
+    parts.headline = uncertain
+      ? 'The reads this page can account for named your document by id — no corpus search among them.'
+      : 'No corpus search was needed — the agent read your document by id.';
     parts.body = `Naming the file is narrower than the entity could ever have made it, so ` +
       `nothing here read anybody else's documents.\n\n` +
       named.map(_describeCall).join('\n\n');
@@ -676,13 +718,23 @@ function _renderRetrievalScope(entity, agentToolCalls) {
     parts.body = '';
   }
 
-  // Shown in every verdict, and counted in none of them.
-  const aside = unclassified.length
+  // Shown in every verdict. Two sections, because they are two different facts:
+  // one is "we know this did not search", the other is "we cannot tell".
+  const asideList = asides.length
     ? `\n\nNot counted either way — these are not document retrieval:\n\n` +
-      unclassified.map(_describeCall).join('\n\n')
+      asides.map(_describeCall).join('\n\n')
     : '';
 
-  const detail = [`Asked for: ${asked}`, parts.headline, '', parts.body].join('\n').trimEnd() + aside;
+  const unknownList = unknown.length
+    ? `\n\nNOT RECOGNISED — this page cannot tell whether ` +
+      `${unknown.length === 1 ? 'this call read' : 'these calls read'} the corpus, so ` +
+      `${unknown.length === 1 ? 'it is' : 'they are'} neither counted nor ruled out. That is why ` +
+      `the line above says what it can account for rather than "every":\n\n` +
+      unknown.map(_describeCall).join('\n\n')
+    : '';
+
+  const detail = [`Asked for: ${asked}`, parts.headline, '', parts.body].join('\n').trimEnd() +
+    asideList + unknownList;
   addStep('scope', 'Retrieval scope', detail, parts.status, { nest: true });
 }
 
