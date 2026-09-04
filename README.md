@@ -227,8 +227,15 @@ unpublished edit changes nothing.
 - Look at **version history**. Every save is a version with an author, which is how you find out
   who changed the room's answers.
 
-> At most **two** skills are injected into any one request, which is why only one of the three
-> workshop skills is published at a time. If yours is a draft, publishing it is step one.
+> At most **two** skills reach any one request, and they are the same skills for everyone in the
+> room — the pool is not per-person. That is why exactly one of the three workshop skills is
+> published at a time.
+>
+> So publishing a second one is not on the list above. Two would already sit at the cap, a third is
+> dropped **silently** — no error, nowhere, and no sign on the answer that a skill went missing —
+> and the room's answers would start moving for a reason nobody in it can see. Workshops 2 and 3
+> are drafts on purpose: a draft is out of the pool. Edit and re-publish *this* workshop's skill as
+> freely as the list invites, and leave the other two as you found them.
 
 ## Configuration
 
