@@ -436,6 +436,74 @@ check('an unrecognised call alone is not written off as "nothing to judge"',
 check('...and it reads differently from a turn whose only aside we DO recognise',
   unknownOnly.card?.text !== (await chatRun('First.Last@constellationdealer.com', [otherServer])).card?.text);
 
+// ── 5e. a tool named after something Object.prototype owns ───────────────────
+// The classification table is keyed by a name the AGENT chose, and an object
+// literal answers for twelve names it was never given. `RETRIEVAL_TOOLS
+// ['constructor']` is a truthy function, which the role lookup passed through
+// as a role of its own -- none of the four buckets, so the call landed in no
+// bucket, was neither counted nor listed, and was NOT filed as `unknown`
+// either. That last part is the whole of it: `unknown` is what qualifies the
+// verdict, so the card printed its confident green over a turn containing a
+// call it had never seen. Measured before the fix: all twelve names, silently
+// dropped, green intact.
+//
+// The names are not written down here. Three of them are the obvious ones and
+// a list of three is how the fourth gets through, so the set is READ OFF
+// Object.prototype at runtime -- every member it has today, including any the
+// language adds after this was written.
+const INHERITED_NAMES = await evaluate('Object.getOwnPropertyNames(Object.prototype)');
+check('the inherited-name set is read off the prototype and is not empty',
+  Array.isArray(INHERITED_NAMES) && INHERITED_NAMES.length >= 10, `${INHERITED_NAMES?.length} names`);
+
+// Classification first, because a call in no bucket is the defect itself and
+// the card is only where it becomes visible.
+const BUCKETS = ['corpus', 'pinned', 'aside', 'unknown'];
+const roles = await evaluate(`
+  return Object.getOwnPropertyNames(Object.prototype).map(name => {
+    let role;
+    try { role = _retrievalRole({ toolName: name, serverName: 'media', arguments: {} }); }
+    catch (e) { role = 'THREW: ' + e.message; }
+    return [name, typeof role === 'string' ? role : 'NOT-A-BUCKET(' + typeof role + ')'];
+  });`);
+const unbucketed = roles.filter(([, role]) => !BUCKETS.includes(role));
+check('every inherited name classifies into one of the four buckets, none into a fifth',
+  unbucketed.length === 0, unbucketed.map(([n, r]) => `${n}=${r}`).join(' '));
+check('...and each is treated as UNRECOGNISED, since that is what it is',
+  roles.every(([, role]) => role === 'unknown'),
+  roles.filter(([, r]) => r !== 'unknown').map(([n, r]) => `${n}=${r}`).join(' '));
+
+// Then the observable, against the plain unrecognised tool as the reference.
+// Comparing to the reference rather than to a spelling is what keeps this
+// honest: whatever the card comes to say about an unrecognised call, it has to
+// say the same thing about one that happens to be named `toString`.
+const esc = t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const referenceUnknown = await chatRun('First.Last@constellationdealer.com', [mediaScoped, unknownTool]);
+const reference = (referenceUnknown.card?.text || '').split(unknownTool.toolName).join('«tool»');
+
+for (const name of INHERITED_NAMES) {
+  const fixture = { toolName: name, serverName: 'media', arguments: unknownTool.arguments };
+  const run = await chatRun('First.Last@constellationdealer.com', [mediaScoped, fixture]);
+  const text = run.card?.text || '';
+
+  check(`a tool named \`${name}\` does not leave the confident green standing`,
+    !/Every corpus search carried your entity/.test(text) && run.card?.state !== 'done',
+    `${run.card?.state} — ${text.slice(0, 150)}`);
+
+  // The silent part of the bug: it was not merely miscounted, it was gone.
+  check(`a tool named \`${name}\` is still on the card rather than dropped`,
+    text.includes(name) && /NOT RECOGNISED/.test(text), text.slice(-160));
+
+  check(`a tool named \`${name}\` reads exactly like any other unrecognised tool`,
+    text.split(new RegExp(esc(name), 'g')).join('«tool»') === reference,
+    `${run.card?.state} — ${text.slice(0, 150)}`);
+}
+
+// The other direction: the guard must not have made real names unrecognisable.
+check('the guard did not cost the real tool names their classification',
+  (await chatRun('First.Last@constellationdealer.com', [mediaScoped])).card?.state === 'done' &&
+  (await chatRun('First.Last@constellationdealer.com', [mediaByFileId])).card?.state === 'done' &&
+  (await chatRun('First.Last@constellationdealer.com', [mediaNonSearch])).card?.state === 'idle');
+
 // The explanation belongs only where a claim was actually given up. A MIXED or
 // unscoped headline never asserted anything universal, so an unrecognised call
 // took nothing away from it, and printing "that is why the line above..." there
