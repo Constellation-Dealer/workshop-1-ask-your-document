@@ -56,7 +56,58 @@ good answer from a plausible one.
 
 Naming the file distinctively — `compact-tractor-manual-yourname.pdf` — makes it easier to ask a
 question you know only your document answers. That is a **retrieval aid, not a control**: it helps
-you steer your own question, it keeps nobody else out.
+you steer your own question, it keeps nobody else out. Your upload now carries a tag with your name
+on it as well — see *Your own corner of the corpus* below — which is a better retrieval aid and
+still not a control.
+
+## Your own corner of the corpus
+
+The warning above stays true: one dealer, one corpus, nothing you upload is private to you. This is
+the other half of it. Within a shared corpus, your upload can still say which of us put it there.
+
+TargetUMH lets a file be **tagged with an entity** — a type and an id, stored next to the file — and
+the retrieval tool can filter on it. That is not a workshop invention. Of this dealer's roughly
+3,400 documents, about 2,400 already carry such a tag, and the platform's OEM manual lookup filters
+on exactly `entityType="Model"`. This exercise was one of the few things not using it, so every
+question you asked searched all 3,400 documents at once.
+
+Now it uses it. Two things changed, and they are **not the same kind of thing**.
+
+**On upload — enforced.** `uploadPdf` now sends `entityType: "Model"` and `entityId: <your handle>`
+along with the file. TargetUMH records the tag, and rejects the upload with a 400 if only one of the
+pair arrives — so they always travel together. Your handle comes from `participantEntityId()` in
+`helpers.js`: the local part of the IDMS username already in your `.env`, lowercased and normalised,
+so `first.last@…` becomes `first-last`. Nothing new to configure and no extra credential. It is the
+same every run, which is what lets today's run find what you uploaded yesterday. The connection
+panel at the top of the page shows the tag you will get.
+
+**On the question — steered, not enforced.** The same entity goes to the Gateway with your question.
+But the Gateway's *agent* chooses the tool arguments, and it is free to leave yours out. The entity
+is a request, not a filter. Retrieval usually narrows to your own document. It is not guaranteed to.
+
+### The observable
+
+So how do you know which of those happened? Not from the answer — a good answer looks the same
+either way.
+
+The trace now carries a **Retrieval scope** card under the Gateway step, and it prints the arguments
+the agent *actually* passed to `vector_search_media`. If your `entityType`/`entityId` are in there,
+the search was scoped. If the card is red, they were not, and the search ran across everything —
+your loop is fine, the steering just did not hold that time.
+
+That card is the only place those arguments show up. The `tool_start` event the tool card is drawn
+from carries the tool's *name* and a description and nothing else; the arguments do not reach the
+page until the turn is over, on the `complete` event.
+
+Worth doing once: ask something only your document answers and read the card. Then ask something
+only somebody else's document could answer, and read it again.
+
+### Still not a privacy control
+
+Tagging changes what gets **retrieved**. It does not change what can be **reached**. Your document
+is still in the shared corpus, still readable by everyone in the cohort, and a question asked
+without the scope — or an agent that ignores it — will still find it. **The warning above is the one
+that governs what you upload.**
 
 ## File Structure
 

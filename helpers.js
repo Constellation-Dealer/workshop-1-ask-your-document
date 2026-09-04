@@ -181,6 +181,7 @@ function renderConnection() {
   state.textContent = ready ? 'credentials loaded' : 'not configured';
   state.setAttribute('data-ok', String(ready));
 
+  const entityTag = participantEntityId();
   const rows = [
     ['Gateway', _hostOf(GATEWAY_URL), Boolean(GATEWAY_URL)],
     ['Media hub', _hostOf(UMH_URL), Boolean(UMH_URL)],
@@ -188,7 +189,11 @@ function renderConnection() {
     ['Dealer', DEALER_GUID, Boolean(DEALER_GUID)],
     ['Username', _config.username, Boolean(_config.username)],
     ['Password', _config.password ? '••••••• loaded' : '', Boolean(_config.password)],
-    ['Secret', _config.clientSecret ? '••••••• loaded' : '', Boolean(_config.clientSecret)]
+    ['Secret', _config.clientSecret ? '••••••• loaded' : '', Boolean(_config.clientSecret)],
+    // The tag your uploads carry and your questions ask for. Shown because it
+    // is derived rather than configured, and the same .env must always produce
+    // the same one — see participantEntityId().
+    ['Your tag', entityTag ? `${PARTICIPANT_ENTITY_TYPE} / ${entityTag}` : '', Boolean(entityTag)]
   ];
 
   const list = document.getElementById('connectionList');
@@ -258,6 +263,75 @@ async function authenticate() {
   return _authToken;
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  WHOSE DOCUMENT IS THIS? — the participant's entity tag
+//
+//  Every participant in this workshop signs in as the SAME dealer, so every
+//  upload lands in one corpus of a few thousand documents. An entity tag is
+//  how a document says which of us put it there: TargetUMH stores it in
+//  media_entities, and the retrieval tool can filter on it.
+//
+//  Two different things, and it matters which is which:
+//    - the UPLOAD side is ENFORCED. UMH records the tag, and rejects the
+//      request outright if entityType and entityId do not travel together.
+//    - the QUERY side is STEERED. The LLM agent chooses the tool arguments,
+//      so the tag influences retrieval; it does not guarantee it.
+//
+//  Neither side is a privacy control. The corpus stays shared — see
+//  "The PDF you bring" in the README.
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * The entity type every workshop upload is tagged with.
+ *
+ * 'Model' is what the platform already uses for this shape of tag — the OEM
+ * manual lookup filters vector_search_media with entityType='Model' — so the
+ * retrieval tool understands it without anything new being taught.
+ */
+const PARTICIPANT_ENTITY_TYPE = 'Model';
+
+/**
+ * The participant's own handle, derived from the IDMS username already in .env.
+ *
+ * No portal call and no extra credential: the username is the one thing in the
+ * config that is different for each of us, so it is what the handle is made of.
+ *
+ * It must be STABLE — the same .env must produce the same handle on every run,
+ * or a second run cannot find what the first one uploaded. That is why this is
+ * a pure function of the username with no clock, no randomness and no counter
+ * in it.
+ *
+ * The +tag some workshop accounts carry (first.last+perseus@…) is normalised,
+ * not stripped: two accounts differing only by their tag are different people,
+ * and dropping it would collide them. Two genuinely different addresses can
+ * still normalise to the same handle (first.last@a vs first_last@b); that
+ * costs a little retrieval precision and nothing else, which is the right
+ * trade for something with no lookup behind it.
+ *
+ * Returns '' when there is no username to derive from — callers must then send
+ * NEITHER entity field, never one of them.
+ */
+function participantEntityId() {
+  const localPart = String(_config.username || '').trim().toLowerCase().split('@')[0];
+  return localPart
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+/**
+ * The entity pair to tag with and to ask for, or null when it cannot be derived.
+ *
+ * Returned as a pair on purpose: UMH returns 400 for entityType without
+ * entityId or the other way round, so there is no code path here that can
+ * produce half of one.
+ */
+function participantEntity() {
+  const entityId = participantEntityId();
+  if (!entityId) return null;
+  return { entityType: PARTICIPANT_ENTITY_TYPE, entityId };
+}
+
 /**
  * Upload a PDF file. Returns { id, ingestionStatus, ... }
  */
@@ -267,6 +341,14 @@ async function uploadPdf(file) {
   formData.append('allowUnassigned', 'true');
   formData.append('generateEmbedding', 'true');
   formData.append('description', 'Uploaded for RAG exercise');
+
+  // Tag the upload as this participant's. Both fields or neither: UMH rejects
+  // the request with a 400 when only one of the pair is present.
+  const entity = participantEntity();
+  if (entity) {
+    formData.append('entityType', entity.entityType);
+    formData.append('entityId', entity.entityId);
+  }
 
   const res = await fetch(`${UMH_URL}/api/v1/${getDealerGuid()}/media/upload`, {
     method: 'POST',
@@ -344,16 +426,18 @@ function explainIngestionStop(status) {
  * @param {function} onToolStart    - Called with (toolName, description) when a tool starts
  * @param {function} onToolComplete - Called with (toolName, success, summary) when a tool finishes
  * @param {function} onThinking     - Called with (message) when the LLM is thinking
+ * @param {object|null} [entity]    - Optional { entityType, entityId } to steer retrieval
+ *                                    towards. Defaults to this participant's own tag.
  * @returns {Promise<{message: string, toolCalls: Array}>} The final answer and tool call log
  */
-async function chatWithGateway(message, onToolStart, onToolComplete, onThinking) {
+async function chatWithGateway(message, onToolStart, onToolComplete, onThinking, entity = participantEntity()) {
   const res = await fetch(`${GATEWAY_URL}/api/chat/stream`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${getToken()}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ message })
+    body: JSON.stringify(_chatRequestBody(message, entity))
   });
 
   if (!res.ok) {
@@ -361,7 +445,93 @@ async function chatWithGateway(message, onToolStart, onToolComplete, onThinking)
     throw new Error(`Gateway request failed, so the agent could not plan tool calls or compose an answer.${text ? ' Details: ' + text : ` (${res.status} ${res.statusText})`}`);
   }
 
-  return _parseSseStream(res.body, onToolStart, onToolComplete, onThinking);
+  const result = await _parseSseStream(res.body, onToolStart, onToolComplete, onThinking);
+  _renderRetrievalScope(entity, result.agentToolCalls);
+  return result;
+}
+
+/**
+ * The body sent to /api/chat/stream.
+ *
+ * Without an entity this is the bare { message } it has always been. With one,
+ * the entity is asked for on two channels, because neither is a filter:
+ *
+ *   - a line appended to `message`, naming the tool arguments outright. This is
+ *     the one that actually moves the agent. `displayMessage` carries the
+ *     question as typed, so the session history the platform stores shows what
+ *     the participant asked, not the plumbing.
+ *   - `context.activeEntity`, which the Gateway renders into the system prompt
+ *     as "User is viewing: Model / ID: …". Weaker, and there for the same
+ *     reason a host app sends it: it is the structured way to say what the
+ *     user is looking at.
+ *
+ * Both are prompt text in the end. The agent may ignore either.
+ */
+function _chatRequestBody(message, entity) {
+  if (!entity) return { message };
+
+  const scopeLine =
+    `(Retrieval scope: search only the documents tagged entityType "${entity.entityType}" and ` +
+    `entityId "${entity.entityId}". Pass both of those to the media search tool.)`;
+
+  return {
+    message: `${message}\n\n${scopeLine}`,
+    displayMessage: message,
+    context: {
+      appId: 'workshop-1-ask-your-document',
+      appName: 'Ask Your Document',
+      appVersion: APP_VERSION,
+      dealer: { dealerGuid: getDealerGuid() },
+      activeEntity: {
+        type: entity.entityType,
+        id: entity.entityId,
+        summary: `The PDF this participant uploaded, tagged ${entity.entityType}/${entity.entityId}.`
+      }
+    }
+  };
+}
+
+/**
+ * Show what the agent ACTUALLY passed — the whole point of the exercise.
+ *
+ * The tool card rendered from the `tool_start` event cannot answer this: that
+ * event carries the tool's name and a "Executing …" description and no
+ * arguments at all. The arguments arrive once, at the end, on the `complete`
+ * event as response.toolCalls[].arguments. So this reads them there and puts
+ * them on the rail next to the tool call they belong to.
+ *
+ * A run where the scope was NOT applied is marked failed on purpose. The run
+ * itself was fine; the steering is what did not hold, and that is the thing
+ * worth noticing rather than a line of grey text nobody reads.
+ */
+function _renderRetrievalScope(entity, agentToolCalls) {
+  if (!entity) return;
+
+  const calls = Array.isArray(agentToolCalls) ? agentToolCalls : [];
+  const asked = `${entity.entityType} / ${entity.entityId}`;
+  const honoured = calls.filter(call =>
+    call && call.arguments &&
+    call.arguments.entityType === entity.entityType &&
+    call.arguments.entityId === entity.entityId);
+
+  if (honoured.length > 0) {
+    const detail =
+      `Asked for: ${asked}\nThe agent passed it.\n\n` +
+      honoured.map(call => `${call.toolName}(${JSON.stringify(call.arguments, null, 2)})`).join('\n\n');
+    addStep('scope', 'Retrieval scope', detail, 'complete', { nest: true });
+    return;
+  }
+
+  const named = calls.map(call => call && call.toolName).filter(Boolean);
+  const what = named.length
+    ? `It called: ${named.join(', ')} — without your entity.`
+    : 'It made no tool calls at all this turn, so nothing was retrieved.';
+
+  addStep('scope', 'Retrieval scope', `Asked for: ${asked}\nThe agent did NOT pass it.\n\n${what}\n\n` +
+    `Your loop is fine — this is what "steered, not enforced" looks like. The entity is a ` +
+    `request to the agent, and retrieval this time ran across the whole shared corpus.\n\n` +
+    calls.map(call => `${call.toolName}(${JSON.stringify(call.arguments, null, 2)})`).join('\n\n'),
+    'error', { nest: true });
 }
 
 /**
@@ -376,6 +546,10 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
   let eventType = null;
   let assistantTurnId = null;
   let sessionId = null;
+  // The agent's tool calls WITH their arguments. Only the `complete` event has
+  // them — `tool_start` carries a name and a description and nothing else — so
+  // there is no way to show what was passed until the turn is over.
+  let agentToolCalls = null;
 
   // Gateway events are not perfectly uniform. Normalize the common
   // shapes so the teaching app can focus on the loop, not event plumbing.
@@ -418,6 +592,7 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
         if (data && typeof data === 'object' && data.response) {
           assistantTurnId = data.response.assistantTurnId ?? assistantTurnId;
           sessionId = data.response.sessionId ?? sessionId;
+          if (Array.isArray(data.response.toolCalls)) agentToolCalls = data.response.toolCalls;
         }
         break;
     }
@@ -445,7 +620,9 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
   }
 
   _lastTurnId = assistantTurnId;
-  return { message: finalMessage, toolCalls, assistantTurnId, sessionId };
+  // `toolCalls` keeps its existing shape (one entry per tool_start, name only).
+  // `agentToolCalls` is additive and is the one that carries arguments.
+  return { message: finalMessage, toolCalls, agentToolCalls, assistantTurnId, sessionId };
 }
 
 // ═══════════════════════════════════════════════════════════════
