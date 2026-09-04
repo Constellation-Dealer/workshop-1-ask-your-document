@@ -105,12 +105,17 @@ everybody's documents.
 
 A red card is not a bug in your loop. It is what "steered, not enforced" looks like from outside.
 
-Calls that could never have carried the entity are left out of the verdict: fetching a document by
-its id is already narrower than any entity could make it, a tool that reads the list of entity
-*names* is not reading documents at all, and a tool on another server never touched this corpus in
-the first place. The card judges the searches the entity could actually have narrowed — a red card
-on a run that was scoped would teach you the wrong thing just as surely as a green one on a run that
-was not.
+What the card judges is narrower than "every tool the agent called". Only calls it **recognises as
+retrieving document content** count. Generating embeddings is processing; listing the entity *names*
+in use is not reading documents; a tool this page has never heard of is exactly that. All of those
+are printed under *not counted either way* and move the verdict nowhere. If nothing recognisable
+retrieved anything, the card is neither green nor red — it says it has nothing to judge, rather than
+guessing.
+
+That cuts both ways on purpose. A green card on a run that went wide would teach you that the entity
+is enforced. A red card on a run that was properly scoped would teach you it never works — and you
+would have no way to tell the card was wrong. The rule it applies is written down in one place, in
+`helpers.js`: look for `RETRIEVAL_TOOLS`.
 
 Case does not count against you either way. TargetUMH matches an entity type and id without regard
 to case, so if the agent writes back `model` or `First-Last`, that is still your document and the
