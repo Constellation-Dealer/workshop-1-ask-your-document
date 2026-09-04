@@ -19,8 +19,16 @@ name: checks
 #   checking for particular strings, so the skeleton and the solution are both
 #   covered by the same check with nothing skipped.
 #
-# Neither installs anything: ubuntu-latest ships python3, node and Chrome, and the
-# static server is python3's own. No npm package is fetched at check time.
+# scope — every participant signs in as the same dealer, so an upload says whose
+#   it is only through its entity tag. UMH rejects entityType without entityId
+#   with a 400, which for a participant is a dead exercise rather than a
+#   warning, so the tag is asserted as "both fields or neither". The scope card
+#   is checked too: it is the only place the agent's real tool arguments are
+#   visible, and if it stops rendering the exercise still runs with its one
+#   observable quietly gone.
+#
+# None of these installs anything: ubuntu-latest ships python3, node and Chrome, and
+# the static server is python3's own. No npm package is fetched at check time.
 
 on:
   push:
@@ -99,3 +107,32 @@ jobs:
           APP_URL: http://127.0.0.1:5198/
           CDP_URL: http://127.0.0.1:9334
         run: node .github/scripts/test-ingestion.mjs
+
+  scope:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Serve the app
+        run: |
+          python3 -m http.server 5197 --bind 127.0.0.1 > /tmp/http.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://127.0.0.1:5197/ && break
+            sleep 1
+          done
+          curl -sf -o /dev/null http://127.0.0.1:5197/ || { echo "server never came up"; cat /tmp/http.log; exit 1; }
+      - name: Start headless Chrome
+        run: |
+          CHROME="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser || command -v chromium)"
+          [ -n "$CHROME" ] || { echo "no Chrome on this runner"; exit 1; }
+          "$CHROME" --headless=new --disable-gpu --no-sandbox \
+            --remote-debugging-port=9335 --user-data-dir=/tmp/cdp-scope about:blank > /tmp/chrome.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://127.0.0.1:9335/json/version && break
+            sleep 1
+          done
+          curl -sf -o /dev/null http://127.0.0.1:9335/json/version || { echo "Chrome never exposed CDP"; cat /tmp/chrome.log; exit 1; }
+      - name: Check the participant entity scope
+        env:
+          APP_URL: http://127.0.0.1:5197/
+          CDP_URL: http://127.0.0.1:9335
+        run: node .github/scripts/scope-checks.mjs
