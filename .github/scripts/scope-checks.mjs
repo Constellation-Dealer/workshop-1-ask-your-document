@@ -121,16 +121,28 @@ const chatRun = async (username, toolCalls) => evaluate(`
     card: card ? { state: card.getAttribute('data-state'), text: card.textContent } : null
   };`);
 
-const scopedCall = [{
-  toolName: 'vector_search_media',
+// serverName is what the Gateway really sends on response.toolCalls[]; it is how
+// a corpus read is told apart from a tool that never touched these documents.
+const mediaScoped = {
+  toolName: 'vector_search_media', serverName: 'media',
   arguments: { dealerGuid: 'd', query: 'torque', entityType: 'Model', entityId: 'first-last' }
-}];
-const unscopedCall = [{
-  toolName: 'vector_search_media',
-  arguments: { dealerGuid: 'd', query: 'torque' }
-}];
+};
+const mediaWide = {
+  toolName: 'search_media', serverName: 'media',
+  arguments: { dealerGuid: 'd', fileType: 'documents' }
+};
+// Already pinned to one file, so the entity has nothing to narrow.
+const mediaByFileId = {
+  toolName: 'get_document_chunks', serverName: 'media',
+  arguments: { dealerGuid: 'd', mediaFileId: 'abc-123' }
+};
+// Carries a query, never reads this corpus.
+const otherServer = {
+  toolName: 'tavily_search', serverName: 'research',
+  arguments: { query: 'axle torque' }
+};
 
-const honoured = await chatRun('First.Last@constellationdealer.com', scopedCall);
+const honoured = await chatRun('First.Last@constellationdealer.com', [mediaScoped]);
 
 check('the question carries the entity the upload was tagged with',
   honoured.body.message.includes('Model') && honoured.body.message.includes('first-last'),
@@ -149,14 +161,45 @@ check('the card shows the arguments the agent actually passed, not just the tool
 
 // The case that matters: the agent ignored the entity. The run succeeds, the
 // answer renders, and the ONLY thing that says retrieval went wide is this card.
-const ignored = await chatRun('First.Last@constellationdealer.com', unscopedCall);
+const ignored = await chatRun('First.Last@constellationdealer.com', [mediaWide]);
 check('an unscoped tool call is reported as such, not silently passed',
   ignored.card !== null && ignored.card.state === 'failed', ignored.card?.state);
 check('and the card says the search went wide rather than blaming the loop',
   /did NOT pass|whole shared corpus/i.test(ignored.card?.text || ''), ignored.card?.text?.slice(0, 300));
 
+// ── 4. a MIXED turn ──────────────────────────────────────────────────────────
+// A turn is not one search. If ANY corpus read went out without the entity, the
+// card must not read as scoped — that reading is the single piece of evidence a
+// participant has, and getting it wrong teaches the opposite of the lesson.
+const mixed = await chatRun('First.Last@constellationdealer.com', [mediaScoped, mediaWide]);
+check('a mixed turn is NOT reported as scoped', mixed.card?.state !== 'done', mixed.card?.state);
+check('a mixed turn is called out as mixed, not just "not scoped"',
+  /mixed/i.test(mixed.card?.text || ''), mixed.card?.text?.slice(0, 160));
+check('the count agrees with the listing rather than contradicting it',
+  (mixed.card?.text || '').includes('1 of 2 corpus searches carried it'),
+  mixed.card?.text?.slice(0, 200));
+check('the call that went out wide is named, since that is the actionable part',
+  (mixed.card?.text || '').includes('search_media'), mixed.card?.text?.slice(0, 300));
+check('a mixed turn reads differently from a fully unscoped one',
+  mixed.card?.text !== ignored.card?.text);
+
+// The other half of the same property: over-flagging teaches the wrong thing too.
+const withOtherTools = await chatRun('First.Last@constellationdealer.com',
+  [mediaScoped, mediaByFileId, otherServer]);
+check('a call already pinned to one media file does not count as unscoped',
+  withOtherTools.card?.state === 'done', withOtherTools.card?.state);
+check('a tool on another server does not count as an unscoped corpus read',
+  (withOtherTools.card?.text || '').includes('1 of 1 corpus searches carried it'),
+  withOtherTools.card?.text?.slice(0, 200));
+
+// No corpus read visible at all must not read as scoped either.
+const nothingVisible = await chatRun('First.Last@constellationdealer.com', [otherServer]);
+check('a turn with no corpus search does not claim a scope',
+  nothingVisible.card?.state !== 'done' && /no search of the shared corpus/i.test(nothingVisible.card?.text || ''),
+  nothingVisible.card?.text?.slice(0, 160));
+
 // No entity to ask for at all: the request must go out exactly as it always did.
-const bare = await chatRun('', scopedCall);
+const bare = await chatRun('', [mediaScoped]);
 check('with no handle the request body is unchanged from before this feature',
   Object.keys(bare.body).length === 1 && bare.body.message === 'what is the torque?',
   JSON.stringify(bare.body));

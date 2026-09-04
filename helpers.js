@@ -492,6 +492,41 @@ function _chatRequestBody(message, entity) {
 }
 
 /**
+ * Did this call carry the entity we asked for?
+ */
+function _carriesEntity(call, entity) {
+  const args = (call && call.arguments) || {};
+  return args.entityType === entity.entityType && args.entityId === entity.entityId;
+}
+
+/**
+ * Could the entity have narrowed this call?
+ *
+ * Expressed as a property rather than a list of tool names, because a list is
+ * wrong the moment the agent reaches for a tool nobody here has heard of:
+ *
+ *   - it ran on the MEDIA server, so it read this dealer's corpus. A tool on
+ *     some other server — a web search, say — also takes a query and never
+ *     touches these documents; counting it would put a red card on a run whose
+ *     retrieval was perfectly scoped.
+ *   - and it is not already pinned to one media file. get_document_chunks and
+ *     get_media_metadata are handed a mediaFileId, which is narrower than any
+ *     entity could make them; there is nothing for the entity to do there.
+ *
+ * Everything else the media server ran read across the shared corpus, and the
+ * entity is exactly what would have narrowed it.
+ */
+function _isNarrowableMediaCall(call) {
+  if (!call || String(call.serverName || '').toLowerCase() !== 'media') return false;
+  const args = call.arguments || {};
+  return !Object.keys(args).some(key => /^mediafileid$/i.test(key) && args[key]);
+}
+
+function _describeCall(call) {
+  return `${call.toolName}(${JSON.stringify(call.arguments, null, 2)})`;
+}
+
+/**
  * Show what the agent ACTUALLY passed — the whole point of the exercise.
  *
  * The tool card rendered from the `tool_start` event cannot answer this: that
@@ -500,38 +535,66 @@ function _chatRequestBody(message, entity) {
  * event as response.toolCalls[].arguments. So this reads them there and puts
  * them on the rail next to the tool call they belong to.
  *
- * A run where the scope was NOT applied is marked failed on purpose. The run
- * itself was fine; the steering is what did not hold, and that is the thing
- * worth noticing rather than a line of grey text nobody reads.
+ * A turn is not one search. The agent can run several, and it can carry the
+ * entity on some and not others — and a card that called that "scoped" would
+ * teach the exact opposite of the lesson it exists for, on the one piece of
+ * evidence a participant has. So a MIXED turn is its own verdict, it is not
+ * green, and it names the calls that went out wide, because those are the
+ * actionable part.
+ *
+ * Everything below — the status colour, the headline, the counts and the
+ * listing — is derived from ONE verdict. Deriving the colour in one place and
+ * the wording in another is how a card ends up saying "scoped" above a list of
+ * unscoped calls.
  */
 function _renderRetrievalScope(entity, agentToolCalls) {
   if (!entity) return;
 
   const calls = Array.isArray(agentToolCalls) ? agentToolCalls : [];
   const asked = `${entity.entityType} / ${entity.entityId}`;
-  const honoured = calls.filter(call =>
-    call && call.arguments &&
-    call.arguments.entityType === entity.entityType &&
-    call.arguments.entityId === entity.entityId);
 
-  if (honoured.length > 0) {
-    const detail =
-      `Asked for: ${asked}\nThe agent passed it.\n\n` +
-      honoured.map(call => `${call.toolName}(${JSON.stringify(call.arguments, null, 2)})`).join('\n\n');
-    addStep('scope', 'Retrieval scope', detail, 'complete', { nest: true });
-    return;
+  const narrowable = calls.filter(_isNarrowableMediaCall);
+  const scoped = narrowable.filter(call => _carriesEntity(call, entity));
+  const wide = narrowable.filter(call => !_carriesEntity(call, entity));
+
+  const verdict =
+    narrowable.length === 0 ? 'invisible' :
+    wide.length === 0 ? 'scoped' :
+    scoped.length === 0 ? 'unscoped' :
+    'mixed';
+
+  const steeringNote =
+    `Your loop is fine — this is what "steered, not enforced" looks like. The entity is a ` +
+    `request to the agent, not a filter it has to obey.`;
+
+  // One count, read by every branch below, so the number can never disagree
+  // with the list of calls printed under it.
+  const counted = `${scoped.length} of ${narrowable.length} corpus searches carried it`;
+  const wideList = `Went out WITHOUT your entity — these read the whole shared corpus:\n\n` +
+    wide.map(_describeCall).join('\n\n');
+
+  const parts = { headline: '', body: '', status: 'error' };
+
+  if (verdict === 'scoped') {
+    parts.status = 'complete';
+    parts.headline = `Every corpus search carried your entity — ${counted}.`;
+    parts.body = scoped.map(_describeCall).join('\n\n');
+  } else if (verdict === 'mixed') {
+    parts.headline = `MIXED — only some of the retrieval was yours: ${counted}.`;
+    parts.body = `${steeringNote}\n\n${wideList}\n\nCarried it:\n\n` +
+      scoped.map(_describeCall).join('\n\n');
+  } else if (verdict === 'unscoped') {
+    parts.headline = `The agent did NOT pass it — ${counted}.`;
+    parts.body = `${steeringNote}\n\n${wideList}`;
+  } else {
+    parts.headline = calls.length
+      ? 'No search of the shared corpus was visible in this turn.'
+      : 'The agent made no tool calls at all this turn, so nothing was retrieved.';
+    parts.body = calls.map(_describeCall).join('\n\n');
   }
 
-  const named = calls.map(call => call && call.toolName).filter(Boolean);
-  const what = named.length
-    ? `It called: ${named.join(', ')} — without your entity.`
-    : 'It made no tool calls at all this turn, so nothing was retrieved.';
-
-  addStep('scope', 'Retrieval scope', `Asked for: ${asked}\nThe agent did NOT pass it.\n\n${what}\n\n` +
-    `Your loop is fine — this is what "steered, not enforced" looks like. The entity is a ` +
-    `request to the agent, and retrieval this time ran across the whole shared corpus.\n\n` +
-    calls.map(call => `${call.toolName}(${JSON.stringify(call.arguments, null, 2)})`).join('\n\n'),
-    'error', { nest: true });
+  const detail = [`Asked for: ${asked}`, parts.headline, '', parts.body].join('\n').trimEnd();
+  addStep('scope', 'Retrieval scope', detail, parts.status, { nest: true });
 }
 
 /**

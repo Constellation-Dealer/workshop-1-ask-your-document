@@ -91,9 +91,19 @@ So how do you know which of those happened? Not from the answer — a good answe
 either way.
 
 The trace now carries a **Retrieval scope** card under the Gateway step, and it prints the arguments
-the agent *actually* passed to `vector_search_media`. If your `entityType`/`entityId` are in there,
-the search was scoped. If the card is red, they were not, and the search ran across everything —
-your loop is fine, the steering just did not hold that time.
+the agent *actually* passed to the media tools.
+
+Green means every search of the corpus it ran carried your `entityType`/`entityId`. Red means at
+least one did not — and there are two ways to be red. Either none of them did, or, the one worth
+watching for, **some did and some did not**. A turn is not one search: the agent can run several and
+it does not have to treat them alike. The card calls that case **MIXED**, and then names the
+searches that went out wide, because those are the ones that read everybody's documents.
+
+A red card is not a bug in your loop. It is what "steered, not enforced" looks like from outside.
+
+Calls that could never have carried the entity are left out of the verdict: fetching a document by
+its id is already narrower than any entity could make it, and a tool on another server never touched
+this corpus in the first place. The card judges the searches the entity could have narrowed.
 
 That card is the only place those arguments show up. The `tool_start` event the tool card is drawn
 from carries the tool's *name* and a description and nothing else; the arguments do not reach the
