@@ -105,15 +105,28 @@ everybody's documents.
 
 A red card is not a bug in your loop. It is what "steered, not enforced" looks like from outside.
 
-What the card judges is narrower than "every tool the agent called". Only calls it **recognises as
-retrieving document content** count. Generating embeddings is processing; listing the entity *names*
-in use is not reading documents; a tool this page has never heard of is exactly that. All of those
-are printed under *not counted either way* and move the verdict nowhere. If nothing recognisable
-retrieved anything, the card is neither green nor red — it says it has nothing to judge, rather than
-guessing.
+There is a third thing the card can be, and it is the interesting one: **neither**.
 
-That cuts both ways on purpose. A green card on a run that went wide would teach you that the entity
-is enforced. A red card on a run that was properly scoped would teach you it never works — and you
+What it judges is narrower than "every tool the agent called". Only calls it **recognises as
+retrieving document content** count towards the verdict. The rest split in two, and the split
+matters:
+
+- **Calls it knows are not retrieval.** Generating embeddings is processing; listing the entity
+  *names* in use is not reading documents; a tool the Gateway ran on a different server never
+  touched this corpus. These appear under *not counted either way* and take nothing away from a
+  green card.
+- **Calls it does not recognise at all.** A tool name this page has never seen, running where the
+  media tools run. It *might* have searched wide — there is no way to tell from here. So it does not
+  turn the card red, but it does take away the card's right to say **every**. The headline changes
+  to *"the searches this page can account for carried your entity"*, and the call is named under
+  **NOT RECOGNISED**.
+
+That is the honest reading: the searches I can see carried your entity, and there was also a call I
+cannot vouch for. A universal claim about a turn containing retrieval nobody classified is a claim
+the card has not earned.
+
+It cuts both ways on purpose. A green card on a run that went wide would teach you the entity is
+enforced. A red card on a run that was properly scoped would teach you it never works — and you
 would have no way to tell the card was wrong. The rule it applies is written down in one place, in
 `helpers.js`: look for `RETRIEVAL_TOOLS`.
 
