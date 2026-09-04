@@ -365,6 +365,93 @@ check('a read-by-id turn also stops claiming "no corpus search was needed"',
   directWithUnknown.card?.state !== 'done' && directWithUnknown.card?.state !== 'failed',
   `${directWithUnknown.card?.state} — ${directWithUnknown.card?.text?.slice(0, 170)}`);
 
+// ── 5d. the qualification has to reach the WHOLE card, not just the headline ──
+// The bug this pins, found three times in this one function: the headline was
+// correctly reduced to "what this page can account for" while the body kept
+// asserting "nothing here read anybody else's documents" — a contradiction
+// three lines apart on the same card, in the one place a participant looks to
+// find out what happened. The check above passes with that bug present, because
+// it reads the headline and stops.
+//
+// Naming the offending sentence is what let it through: the headline was
+// checked, the body was not, and a written-down list of forbidden strings only
+// ever covers the instances someone already thought of. So the list is not
+// written down here. It is READ OFF the confident card for the same run — the
+// card renders the claims itself, and every sentence it states universally
+// must be gone from the uncertain render, wherever on the card it lived and
+// whenever it was added.
+const UNIVERSAL = /\b(every|nothing|nobody|anybody else|anyone else|no corpus search|never)\b/i;
+const universalClaims = text => (text || '')
+  .split(/\n+|(?<=[.!])\s+/)
+  .map(s => s.trim())
+  .filter(s => s.length > 25 && UNIVERSAL.test(s));
+
+for (const [label, calls] of [
+  ['a scoped corpus search', [mediaScoped]],
+  ['a by-id read', [mediaByFileId]],
+  ['a turn with no recognised retrieval', [otherServer]]
+]) {
+  const confident = await chatRun('First.Last@constellationdealer.com', calls);
+  const claimed = universalClaims(confident.card?.text);
+
+  // Without this the property passes vacuously: a card that stopped making any
+  // confident claim at all would have nothing to withdraw and would look
+  // clean. The claims are the thing being protected, so their existence is
+  // part of the assertion.
+  check(`${label}: the confident card states something universal to begin with`,
+    claimed.length > 0, JSON.stringify(claimed));
+
+  for (const [unknownLabel, fixture] of [
+    ['an unrecognised tool', unknownTool],
+    ['an unrecognised tool with no serverName', unknownToolNoServer]
+  ]) {
+    const run = await chatRun('First.Last@constellationdealer.com', [...calls, fixture]);
+    const survived = claimed.filter(c => (run.card?.text || '').includes(c));
+    check(`${label} + ${unknownLabel}: EVERY universal claim is withdrawn, not just the headline`,
+      survived.length === 0, survived.join(' || '));
+
+    // A qualified sentence written as "the confident one, plus a caveat" would
+    // satisfy nothing — the contradiction would still be on screen — and the
+    // subset test above is what catches it, since the confident sentence would
+    // still be found. This asserts the other half: something took its place.
+    check(`${label} + ${unknownLabel}: and the card says why it is qualified`,
+      /NOT RECOGNISED/.test(run.card?.text || '') &&
+      /reports only what it can account for/.test(run.card?.text || ''),
+      run.card?.text?.slice(0, 220));
+  }
+}
+
+// The two sentences the property above generalises, pinned as themselves too,
+// because these are the exact readings a participant would be misled by.
+check('a by-id read beside an unrecognised call does not clear the rest of the turn',
+  !/nothing here read anybody else's documents/.test(directWithUnknown.card?.text || '') &&
+  /not settled here/.test(directWithUnknown.card?.text || ''),
+  directWithUnknown.card?.text?.slice(0, 260));
+
+const unknownOnly = await chatRun('First.Last@constellationdealer.com', [unknownTool]);
+check('an unrecognised call alone is not written off as "nothing to judge"',
+  !/nothing to judge/.test(unknownOnly.card?.text || '') &&
+  /the card can clear/.test(unknownOnly.card?.text || ''),
+  `${unknownOnly.card?.state} — ${unknownOnly.card?.text?.slice(0, 200)}`);
+check('...and it reads differently from a turn whose only aside we DO recognise',
+  unknownOnly.card?.text !== (await chatRun('First.Last@constellationdealer.com', [otherServer])).card?.text);
+
+// The explanation belongs only where a claim was actually given up. A MIXED or
+// unscoped headline never asserted anything universal, so an unrecognised call
+// took nothing away from it, and printing "that is why the line above..." there
+// describes a headline that branch does not have.
+for (const [label, calls] of [
+  ['a MIXED turn', [mediaScoped, mediaWide, unknownTool]],
+  ['a fully unscoped turn', [mediaWide, unknownTool]]
+]) {
+  const run = await chatRun('First.Last@constellationdealer.com', calls);
+  check(`${label} names the unrecognised call without claiming it cost the card a claim`,
+    /NOT RECOGNISED/.test(run.card?.text || '') &&
+    !/reports only what it can account for/.test(run.card?.text || '') &&
+    !/rather than "every"/.test(run.card?.text || ''),
+    run.card?.text?.slice(-200));
+}
+
 // The neutral card is a FINISHED step, not one left ticking.
 //
 // Asserting a duration is on screen proves nothing — the row is given one the
