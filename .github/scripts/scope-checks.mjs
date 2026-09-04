@@ -13,6 +13,13 @@
 //    visible — the tool_start event carries a name and a description and no
 //    arguments at all. If the card stops rendering, the exercise still runs and
 //    the one observable it is teaching is simply gone.
+//
+// 4. The card must be wrong in NEITHER direction. Green on a turn that went
+//    wide teaches that steering is enforced; red on a turn that was scoped
+//    teaches that it never works, and the participant has no way to tell the
+//    card is lying. So every call that is not document retrieval is checked
+//    twice — beside a scoped run, and alone — and must move the verdict neither
+//    way. See RETRIEVAL_TOOLS in helpers.js for the rule these check.
 import { goto, evaluate, close } from './cdp.mjs';
 
 const APP_URL = process.env.APP_URL || 'http://127.0.0.1:5197/';
@@ -121,8 +128,8 @@ const chatRun = async (username, toolCalls) => evaluate(`
     card: card ? { state: card.getAttribute('data-state'), text: card.textContent } : null
   };`);
 
-// serverName is what the Gateway really sends on response.toolCalls[]; it is how
-// a corpus read is told apart from a tool that never touched these documents.
+// Fixtures carry serverName because the Gateway really sends it on
+// response.toolCalls[]; the verdict keys on the tool NAME, per RETRIEVAL_TOOLS.
 const mediaScoped = {
   toolName: 'vector_search_media', serverName: 'media',
   arguments: { dealerGuid: 'd', query: 'torque', entityType: 'Model', entityId: 'first-last' }
@@ -144,12 +151,37 @@ const mediaSearchWithinOneFile = {
   toolName: 'get_document_chunks', serverName: 'media',
   arguments: { dealerGuid: 'd', mediaFileId: 'abc-123', query: 'torque' }
 };
-// On the media server and not pinned to a file — but not a search of the
-// documents either. It reads the entity vocabulary and has no entityId to give,
-// so there is nothing here for the scope to have narrowed.
+// Reads the entity VOCABULARY, not documents. Both real shapes of it: the
+// second carries `tags`, which an argument-shape rule read as a corpus filter
+// and so as a wide search, on a run that was scoped.
 const mediaNonSearch = {
   toolName: 'list_media_entity_values', serverName: 'media',
   arguments: { dealerGuid: 'd', entityType: 'Model' }
+};
+const mediaNonSearchTagged = {
+  toolName: 'list_media_entity_values', serverName: 'media',
+  arguments: { dealerGuid: 'd', entityType: 'Model', tags: ['manual'] }
+};
+// PROCESSING, not retrieval, in either direction. `mediaFileIds` is a
+// different parameter from `mediaFileId`, and a pattern match on the key read
+// this as "the agent read your document by id" and painted it green.
+const mediaProcessing = {
+  toolName: 'generate_embeddings', serverName: 'media',
+  arguments: { dealerGuid: 'd', mediaFileIds: ['abc-123', 'def-456'] }
+};
+// A tool this page has never heard of, with a shape it has never seen. It must
+// land neutral rather than being guessed into a verdict.
+const unknownTool = {
+  toolName: 'summarise_service_history', serverName: 'media',
+  arguments: { dealerGuid: 'd', horizonDays: 90, includeDrafts: true }
+};
+// A recognised by-id read that did not actually name a document — it carries
+// the PLURAL key, the same near-miss that fooled the old rule. Recognising the
+// tool is not enough; the call has to have done what the tool is for, so this
+// falls back to neutral rather than being assumed to be a tight read.
+const pinnedWithoutAnId = {
+  toolName: 'get_media_metadata', serverName: 'media',
+  arguments: { dealerGuid: 'd', mediaFileIds: ['abc-123'] }
 };
 // Carries a query, never reads this corpus.
 const otherServer = {
@@ -253,6 +285,51 @@ check('searching WITHIN one already-chosen document is not a corpus search',
   (withinOneFile.card?.text || '').includes('1 of 1 corpus searches carried it'),
   `${withinOneFile.card?.state} — ${withinOneFile.card?.text?.slice(0, 200)}`);
 
+// ── 5b. calls that are not retrieval at all ──────────────────────────────────
+// Each of these is a real TargetUMH operation that an argument-shape rule got
+// wrong. They must not move the verdict in EITHER direction, so each is checked
+// twice: alongside a correctly scoped run (must stay green) and on its own
+// (must not be green, and must not be accused).
+for (const [label, fixture] of [
+  ['list_media_entity_values({ entityType })', mediaNonSearch],
+  ['list_media_entity_values({ entityType, tags })', mediaNonSearchTagged],
+  ['generate_embeddings({ mediaFileIds })', mediaProcessing],
+  ['an unrecognised tool', unknownTool],
+  ['a by-id read that named no document', pinnedWithoutAnId]
+]) {
+  const alongside = await chatRun('First.Last@constellationdealer.com', [mediaScoped, fixture]);
+  check(`${label} does not turn a scoped run red`,
+    alongside.card?.state === 'done' &&
+    (alongside.card?.text || '').includes('1 of 1 corpus searches carried it'),
+    `${alongside.card?.state} — ${alongside.card?.text?.slice(0, 170)}`);
+  check(`${label} is shown but not counted`,
+    /not counted either way/i.test(alongside.card?.text || '') &&
+    (alongside.card?.text || '').includes(fixture.toolName),
+    alongside.card?.text?.slice(0, 220));
+
+  const alone = await chatRun('First.Last@constellationdealer.com', [fixture]);
+  check(`${label} alone is neither green nor an accusation`,
+    alone.card?.state !== 'done' && alone.card?.state !== 'failed' && !accused(alone.card),
+    `${alone.card?.state} — ${alone.card?.text?.slice(0, 170)}`);
+}
+
+// The neutral card is a FINISHED step, not one left ticking.
+//
+// Asserting a duration is on screen proves nothing — the row is given one the
+// moment it is drawn, settled or not. What separates the two is whether the
+// step ended itself: freezeTrace stamps data-settled on rows that never did,
+// which is what every run does when it finishes. So run that, and require the
+// stamp to be absent.
+await chatRun('First.Last@constellationdealer.com', [mediaProcessing]);
+const settling = await evaluate(`
+  freezeTrace();
+  const card = document.getElementById('step-scope');
+  return { state: card.getAttribute('data-state'), settled: card.getAttribute('data-settled') };`);
+check('the neutral card ends itself rather than being mopped up at the end of the run',
+  settling.settled === null, JSON.stringify(settling));
+check('and it is drawn in the neutral state, not a colour',
+  settling.state === 'idle', settling.state);
+
 // ── 6. casing — TargetUMH matches entity type and id without regard to case ──
 // Measured on DEV: a file stored as Model/CaseProbe-MiXeD-0903 was found by all
 // six casings via GET /media/entity, and retrieved through vector_search_media
@@ -275,11 +352,14 @@ check('case folding does not hide a genuinely mixed turn',
 // Nothing retrieved at all is not a scope success either — the answer came from
 // somewhere other than these documents, which is worth a colour of its own.
 const nothingVisible = await chatRun('First.Last@constellationdealer.com', [otherServer]);
-check('a turn that retrieved nothing does not claim a scope',
-  nothingVisible.card?.state !== 'done' && /nothing was retrieved/i.test(nothingVisible.card?.text || ''),
+check('a turn with no recognised retrieval does not claim a scope',
+  nothingVisible.card?.state !== 'done' &&
+  /nothing to judge|nothing was retrieved/i.test(nothingVisible.card?.text || ''),
   `${nothingVisible.card?.state} — ${nothingVisible.card?.text?.slice(0, 160)}`);
 check('...and it is not accused of going wide either',
   !accused(nothingVisible.card), nothingVisible.card?.text?.slice(0, 160));
+check('...and the card says so plainly rather than guessing',
+  nothingVisible.card?.state !== 'failed', nothingVisible.card?.state);
 
 // No entity to ask for at all: the request must go out exactly as it always did.
 const bare = await chatRun('', [mediaScoped]);

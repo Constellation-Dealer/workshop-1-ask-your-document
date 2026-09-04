@@ -529,64 +529,67 @@ function _carriesEntity(call, entity) {
          _sameEntityValue(args.entityId, entity.entityId);
 }
 
-// The arguments that decide WHICH documents come back. This is the media API's
-// filtering vocabulary, deliberately not a list of tool names: a tool added
-// tomorrow that filters this corpus will filter it with these same arguments
-// and is covered without anyone remembering to come back here, which is exactly
-// what a list of tool names cannot promise.
-const CORPUS_FILTER_ARGS = ['query', 'fileType', 'contentType', 'contentClass', 'tags'];
+// ═══════════════════════════════════════════════════════════════
+//  THE RULE THIS CARD JUDGES BY — written down once, here
+//
+//  Only calls RECOGNISED as retrieving document content count towards the
+//  verdict. Every other call — processing, vocabulary lookups, writes, and any
+//  tool this file has never heard of — is shown on the card and moves the
+//  verdict NOWHERE, in either direction.
+//
+//  It is a named set rather than a rule about argument shapes, and that is a
+//  deliberate reversal. Three rounds of shape rules each classified the call in
+//  front of them correctly and then mis-read the next real TargetUMH operation:
+//
+//    - list_media_entity_values({ entityType })        read as a corpus search
+//    - list_media_entity_values({ entityType, tags })  read as one again, once
+//                                                      entityType alone was excluded
+//    - generate_embeddings({ mediaFileIds: [...] })    read as a document read,
+//                                                      because the key differs from
+//                                                      mediaFileId by one letter
+//
+//  Argument names cannot tell you what a tool is FOR, and this tool surface
+//  changes without us. A name we do not know now lands in the neutral bucket,
+//  where the worst case is a card admitting it could not classify a call. A
+//  shape we guess wrong lands in green or red, where the worst case is a
+//  participant taught the opposite of the lesson. A list that fails safe beats
+//  a property that fails wrong.
+//
+//  Two roles, and the difference matters:
+//    corpus — returns document content chosen by MATCHING. The entity narrows
+//             which documents that is, so these are the calls being judged.
+//    pinned — returns content from documents the caller already NAMED. Narrower
+//             than the entity could make it; nothing left to narrow.
+//
+//  Not here on purpose: generate_embeddings (processing, not retrieval),
+//  list_media_entity_values (reads the entity vocabulary, not documents),
+//  update_media_entity and upload_customer_document (writes).
+// ═══════════════════════════════════════════════════════════════
+const RETRIEVAL_TOOLS = {
+  vector_search_media: 'corpus',
+  search_media: 'corpus',
+  get_media_for_entity: 'corpus',
+  get_document_chunks: 'pinned',
+  get_media_metadata: 'pinned'
+};
 
 /**
- * Is this a search of the corpus whose results the entity could have narrowed?
+ * What this call did for the answer: 'corpus', 'pinned', or null for
+ * "not recognised as retrieval", which is the neutral bucket.
  *
- * Three things have to hold, and each one is there because dropping it puts a
- * red card on a run that was correctly scoped:
- *
- *   - it ran on the MEDIA server. A tool elsewhere takes a query too and never
- *     touched these documents.
- *   - it is not pinned to a media file id. get_document_chunks and
- *     get_media_metadata are handed the file, which is narrower than any entity
- *     could make them; there is nothing left to narrow.
- *   - it actually SELECTED documents — it carried a corpus filter, or the
- *     entity pair itself. "On the media server and not pinned" is a wider set
- *     than "a search": list_media_entity_values(entityType: 'Model') reads the
- *     entity vocabulary, not documents, and has no entityId to give. Judging it
- *     would accuse a properly scoped run of going wide.
- *
- * Note it is the entity PAIR that counts as a selector, never entityType on its
- * own — a lone entityType is the shape of the vocabulary call above.
+ * A pinned tool that did not actually name a document falls back to neutral
+ * rather than being assumed — the exact key `mediaFileId`, never a pattern,
+ * because `mediaFileIds` is a different parameter belonging to a tool that is
+ * not retrieval at all.
  */
-function _isMediaCall(call) {
-  return Boolean(call) && String(call.serverName || '').toLowerCase() === 'media';
-}
+function _retrievalRole(call) {
+  const role = RETRIEVAL_TOOLS[String((call && call.toolName) || '')];
+  if (!role) return null;
 
-/**
- * Did this call name the document it wanted, instead of looking for one?
- *
- * Worth its own name because a run made entirely of these is not a scoping
- * failure — it is the tightest possible run. Seen live on DEV: handed the file
- * id by the loop, the agent skipped searching altogether and read that one file
- * with get_document_chunks. Calling that "no scope applied" and painting it red
- * would accuse the best-behaved run in the exercise.
- */
-function _pinsOneDocument(call) {
   const args = (call && call.arguments) || {};
-  return Object.keys(args).some(key => /mediafileid/i.test(key) && args[key]);
-}
+  if (role === 'pinned' && !String(args.mediaFileId ?? '').trim()) return null;
 
-function _isCorpusSearch(call) {
-  if (!_isMediaCall(call)) return false;
-  if (_pinsOneDocument(call)) return false;
-
-  const args = call.arguments || {};
-  const filtered = CORPUS_FILTER_ARGS.some(key => {
-    const value = args[key];
-    return value !== undefined && value !== null && value !== '' &&
-      !(Array.isArray(value) && value.length === 0);
-  });
-  const entityPair = Boolean(args.entityType) && Boolean(args.entityId);
-
-  return filtered || entityPair;
+  return role;
 }
 
 function _describeCall(call) {
@@ -620,17 +623,19 @@ function _renderRetrievalScope(entity, agentToolCalls) {
   const calls = Array.isArray(agentToolCalls) ? agentToolCalls : [];
   const asked = `${entity.entityType} / ${entity.entityId}`;
 
-  const narrowable = calls.filter(_isCorpusSearch);
-  const scoped = narrowable.filter(call => _carriesEntity(call, entity));
-  const wide = narrowable.filter(call => !_carriesEntity(call, entity));
-  // Reads that named their document instead of looking for one. Not a search,
-  // and not a failure to scope — the opposite of one.
-  const direct = calls.filter(call => _isMediaCall(call) && _pinsOneDocument(call));
+  // Sort once, by the rule above. Every call lands in exactly one of these
+  // three, and only the first two can move the verdict.
+  const searches = calls.filter(call => _retrievalRole(call) === 'corpus');
+  const named = calls.filter(call => _retrievalRole(call) === 'pinned');
+  const unclassified = calls.filter(call => _retrievalRole(call) === null);
+
+  const scoped = searches.filter(call => _carriesEntity(call, entity));
+  const wide = searches.filter(call => !_carriesEntity(call, entity));
 
   const verdict =
-    narrowable.length > 0
+    searches.length > 0
       ? (wide.length === 0 ? 'scoped' : scoped.length === 0 ? 'unscoped' : 'mixed')
-      : (direct.length > 0 ? 'direct' : 'nothing');
+      : (named.length > 0 ? 'direct' : 'nothing');
 
   const steeringNote =
     `Your loop is fine — this is what "steered, not enforced" looks like. The entity is a ` +
@@ -638,10 +643,12 @@ function _renderRetrievalScope(entity, agentToolCalls) {
 
   // One count, read by every branch below, so the number can never disagree
   // with the list of calls printed under it.
-  const counted = `${scoped.length} of ${narrowable.length} corpus searches carried it`;
+  const counted = `${scoped.length} of ${searches.length} corpus searches carried it`;
   const wideList = `Went out WITHOUT your entity — these read the whole shared corpus:\n\n` +
     wide.map(_describeCall).join('\n\n');
 
+  // 'note' is neither green nor red. A card that cannot tell says so; it does
+  // not guess, and an unrecognised tool never decides the lesson.
   const parts = { headline: '', body: '', status: 'error' };
 
   if (verdict === 'scoped') {
@@ -660,15 +667,22 @@ function _renderRetrievalScope(entity, agentToolCalls) {
     parts.headline = 'No corpus search was needed — the agent read your document by id.';
     parts.body = `Naming the file is narrower than the entity could ever have made it, so ` +
       `nothing here read anybody else's documents.\n\n` +
-      direct.map(_describeCall).join('\n\n');
+      named.map(_describeCall).join('\n\n');
   } else {
+    parts.status = 'note';
     parts.headline = calls.length
-      ? 'Nothing was retrieved this turn — no document was searched for or read.'
+      ? 'No call this page recognises as retrieval ran, so there is nothing to judge.'
       : 'The agent made no tool calls at all this turn, so nothing was retrieved.';
-    parts.body = calls.map(_describeCall).join('\n\n');
+    parts.body = '';
   }
 
-  const detail = [`Asked for: ${asked}`, parts.headline, '', parts.body].join('\n').trimEnd();
+  // Shown in every verdict, and counted in none of them.
+  const aside = unclassified.length
+    ? `\n\nNot counted either way — these are not document retrieval:\n\n` +
+      unclassified.map(_describeCall).join('\n\n')
+    : '';
+
+  const detail = [`Asked for: ${asked}`, parts.headline, '', parts.body].join('\n').trimEnd() + aside;
   addStep('scope', 'Retrieval scope', detail, parts.status, { nest: true });
 }
 
@@ -774,11 +788,18 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
 // ═══════════════════════════════════════════════════════════════
 
 // Statuses loop.js uses, mapped to the four visual states.
+//
+// `note` is the fifth, and it is deliberately not a fourth colour: it maps to
+// `idle`, which carries no colour and no pulse. It exists for a step that has
+// something to SAY and no verdict to give — the Retrieval scope card when the
+// agent ran nothing this page recognises as retrieval. Green would claim a
+// success and red would accuse a run that may well have been fine.
 const STEP_STATES = {
   thinking: 'running',
   waiting: 'running',
   complete: 'done',
-  error: 'failed'
+  error: 'failed',
+  note: 'idle'
 };
 
 // _steps is keyed by a UNIQUE occurrence key and iterated in insertion order,
@@ -990,7 +1011,11 @@ function _applyState(step, status) {
       step.startedAt = performance.now();
     }
     _startTicker();
-  } else if (state !== 'idle' && step.endedAt === null) {
+  } else if (step.endedAt === null) {
+    // Idle settles too. It used to be left ticking, which was harmless while
+    // nothing reached this branch with an idle state — but a `note` step is a
+    // finished step with no verdict, and a finished step that goes on counting
+    // reads as still running.
     step.endedAt = performance.now();
     step.durationEl.textContent = _formatSeconds(step.endedAt - step.startedAt);
   }
