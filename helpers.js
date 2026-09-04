@@ -308,6 +308,13 @@ const PARTICIPANT_ENTITY_TYPE = 'Model';
  * costs a little retrieval precision and nothing else, which is the right
  * trade for something with no lookup behind it.
  *
+ * Lowercased here, in the one place the handle is made, so there is a single
+ * spelling of it in the whole exercise. TargetUMH matches entity ids without
+ * regard to case (measured on DEV, and it indexes on lower(entity_id)), so
+ * casing cannot break retrieval — but a handle that came out differently
+ * depending on how someone typed their username into .env would still be two
+ * handles to a human reading the card, and one of them would look wrong.
+ *
  * Returns '' when there is no username to derive from — callers must then send
  * NEITHER entity field, never one of them.
  */
@@ -492,34 +499,94 @@ function _chatRequestBody(message, entity) {
 }
 
 /**
+ * Two entity values naming the same thing.
+ *
+ * Compared case-INSENSITIVELY because that is what TargetUMH does, measured on
+ * DEV rather than read off either side's source: a file stored as
+ * Model/CaseProbe-MiXeD-0903 was found by all six casings of type and id
+ * through `GET /media/entity/{type}/{id}`, and retrieved by the agent through
+ * vector_search_media whether the entity was spelled as stored, lowercased, or
+ * with the type lowercased. The database backs that up — media_entities carries
+ * a functional index on (dealer_guid, lower(entity_type), lower(entity_id)),
+ * and the corpus really does hold both `Inspection` (24 rows) and `inspection`
+ * (64), `WorkOrder` (1928) and `workOrder` (2).
+ *
+ * The agent writes these strings itself and re-cases them freely. Comparing
+ * with === would call a run unscoped that TargetUMH scoped perfectly well —
+ * a red card on a correct run, which is the one thing this card must not do.
+ */
+function _sameEntityValue(a, b) {
+  const left = String(a ?? '').trim().toLowerCase();
+  return left !== '' && left === String(b ?? '').trim().toLowerCase();
+}
+
+/**
  * Did this call carry the entity we asked for?
  */
 function _carriesEntity(call, entity) {
   const args = (call && call.arguments) || {};
-  return args.entityType === entity.entityType && args.entityId === entity.entityId;
+  return _sameEntityValue(args.entityType, entity.entityType) &&
+         _sameEntityValue(args.entityId, entity.entityId);
+}
+
+// The arguments that decide WHICH documents come back. This is the media API's
+// filtering vocabulary, deliberately not a list of tool names: a tool added
+// tomorrow that filters this corpus will filter it with these same arguments
+// and is covered without anyone remembering to come back here, which is exactly
+// what a list of tool names cannot promise.
+const CORPUS_FILTER_ARGS = ['query', 'fileType', 'contentType', 'contentClass', 'tags'];
+
+/**
+ * Is this a search of the corpus whose results the entity could have narrowed?
+ *
+ * Three things have to hold, and each one is there because dropping it puts a
+ * red card on a run that was correctly scoped:
+ *
+ *   - it ran on the MEDIA server. A tool elsewhere takes a query too and never
+ *     touched these documents.
+ *   - it is not pinned to a media file id. get_document_chunks and
+ *     get_media_metadata are handed the file, which is narrower than any entity
+ *     could make them; there is nothing left to narrow.
+ *   - it actually SELECTED documents — it carried a corpus filter, or the
+ *     entity pair itself. "On the media server and not pinned" is a wider set
+ *     than "a search": list_media_entity_values(entityType: 'Model') reads the
+ *     entity vocabulary, not documents, and has no entityId to give. Judging it
+ *     would accuse a properly scoped run of going wide.
+ *
+ * Note it is the entity PAIR that counts as a selector, never entityType on its
+ * own — a lone entityType is the shape of the vocabulary call above.
+ */
+function _isMediaCall(call) {
+  return Boolean(call) && String(call.serverName || '').toLowerCase() === 'media';
 }
 
 /**
- * Could the entity have narrowed this call?
+ * Did this call name the document it wanted, instead of looking for one?
  *
- * Expressed as a property rather than a list of tool names, because a list is
- * wrong the moment the agent reaches for a tool nobody here has heard of:
- *
- *   - it ran on the MEDIA server, so it read this dealer's corpus. A tool on
- *     some other server — a web search, say — also takes a query and never
- *     touches these documents; counting it would put a red card on a run whose
- *     retrieval was perfectly scoped.
- *   - and it is not already pinned to one media file. get_document_chunks and
- *     get_media_metadata are handed a mediaFileId, which is narrower than any
- *     entity could make them; there is nothing for the entity to do there.
- *
- * Everything else the media server ran read across the shared corpus, and the
- * entity is exactly what would have narrowed it.
+ * Worth its own name because a run made entirely of these is not a scoping
+ * failure — it is the tightest possible run. Seen live on DEV: handed the file
+ * id by the loop, the agent skipped searching altogether and read that one file
+ * with get_document_chunks. Calling that "no scope applied" and painting it red
+ * would accuse the best-behaved run in the exercise.
  */
-function _isNarrowableMediaCall(call) {
-  if (!call || String(call.serverName || '').toLowerCase() !== 'media') return false;
+function _pinsOneDocument(call) {
+  const args = (call && call.arguments) || {};
+  return Object.keys(args).some(key => /mediafileid/i.test(key) && args[key]);
+}
+
+function _isCorpusSearch(call) {
+  if (!_isMediaCall(call)) return false;
+  if (_pinsOneDocument(call)) return false;
+
   const args = call.arguments || {};
-  return !Object.keys(args).some(key => /^mediafileid$/i.test(key) && args[key]);
+  const filtered = CORPUS_FILTER_ARGS.some(key => {
+    const value = args[key];
+    return value !== undefined && value !== null && value !== '' &&
+      !(Array.isArray(value) && value.length === 0);
+  });
+  const entityPair = Boolean(args.entityType) && Boolean(args.entityId);
+
+  return filtered || entityPair;
 }
 
 function _describeCall(call) {
@@ -553,15 +620,17 @@ function _renderRetrievalScope(entity, agentToolCalls) {
   const calls = Array.isArray(agentToolCalls) ? agentToolCalls : [];
   const asked = `${entity.entityType} / ${entity.entityId}`;
 
-  const narrowable = calls.filter(_isNarrowableMediaCall);
+  const narrowable = calls.filter(_isCorpusSearch);
   const scoped = narrowable.filter(call => _carriesEntity(call, entity));
   const wide = narrowable.filter(call => !_carriesEntity(call, entity));
+  // Reads that named their document instead of looking for one. Not a search,
+  // and not a failure to scope — the opposite of one.
+  const direct = calls.filter(call => _isMediaCall(call) && _pinsOneDocument(call));
 
   const verdict =
-    narrowable.length === 0 ? 'invisible' :
-    wide.length === 0 ? 'scoped' :
-    scoped.length === 0 ? 'unscoped' :
-    'mixed';
+    narrowable.length > 0
+      ? (wide.length === 0 ? 'scoped' : scoped.length === 0 ? 'unscoped' : 'mixed')
+      : (direct.length > 0 ? 'direct' : 'nothing');
 
   const steeringNote =
     `Your loop is fine — this is what "steered, not enforced" looks like. The entity is a ` +
@@ -586,9 +655,15 @@ function _renderRetrievalScope(entity, agentToolCalls) {
   } else if (verdict === 'unscoped') {
     parts.headline = `The agent did NOT pass it — ${counted}.`;
     parts.body = `${steeringNote}\n\n${wideList}`;
+  } else if (verdict === 'direct') {
+    parts.status = 'complete';
+    parts.headline = 'No corpus search was needed — the agent read your document by id.';
+    parts.body = `Naming the file is narrower than the entity could ever have made it, so ` +
+      `nothing here read anybody else's documents.\n\n` +
+      direct.map(_describeCall).join('\n\n');
   } else {
     parts.headline = calls.length
-      ? 'No search of the shared corpus was visible in this turn.'
+      ? 'Nothing was retrieved this turn — no document was searched for or read.'
       : 'The agent made no tool calls at all this turn, so nothing was retrieved.';
     parts.body = calls.map(_describeCall).join('\n\n');
   }

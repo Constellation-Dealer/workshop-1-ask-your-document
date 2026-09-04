@@ -136,10 +136,36 @@ const mediaByFileId = {
   toolName: 'get_document_chunks', serverName: 'media',
   arguments: { dealerGuid: 'd', mediaFileId: 'abc-123' }
 };
+// Pinned to one file AND carrying a query — searching WITHIN a document the
+// agent already chose. This is the only shape the mediaFileId guard actually
+// decides: without it the query alone reads as a corpus search and the call is
+// accused of going wide, when it never left the one file.
+const mediaSearchWithinOneFile = {
+  toolName: 'get_document_chunks', serverName: 'media',
+  arguments: { dealerGuid: 'd', mediaFileId: 'abc-123', query: 'torque' }
+};
+// On the media server and not pinned to a file — but not a search of the
+// documents either. It reads the entity vocabulary and has no entityId to give,
+// so there is nothing here for the scope to have narrowed.
+const mediaNonSearch = {
+  toolName: 'list_media_entity_values', serverName: 'media',
+  arguments: { dealerGuid: 'd', entityType: 'Model' }
+};
 // Carries a query, never reads this corpus.
 const otherServer = {
   toolName: 'tavily_search', serverName: 'research',
   arguments: { query: 'axle torque' }
+};
+// The agent re-cased the entity. TargetUMH matches it anyway (measured on DEV),
+// so the retrieval really was scoped and the card must say so.
+const mediaScopedRecased = {
+  toolName: 'vector_search_media', serverName: 'media',
+  arguments: { dealerGuid: 'd', query: 'torque', entityType: 'model', entityId: 'First-Last' }
+};
+// Somebody else's handle. Folding case must not fold this into a match.
+const mediaSomeoneElse = {
+  toolName: 'vector_search_media', serverName: 'media',
+  arguments: { dealerGuid: 'd', query: 'torque', entityType: 'Model', entityId: 'other-person' }
 };
 
 const honoured = await chatRun('First.Last@constellationdealer.com', [mediaScoped]);
@@ -167,6 +193,8 @@ check('an unscoped tool call is reported as such, not silently passed',
 check('and the card says the search went wide rather than blaming the loop',
   /did NOT pass|whole shared corpus/i.test(ignored.card?.text || ''), ignored.card?.text?.slice(0, 300));
 
+const accused = card => card?.state === 'failed' && /WITHOUT your entity/.test(card?.text || '');
+
 // ── 4. a MIXED turn ──────────────────────────────────────────────────────────
 // A turn is not one search. If ANY corpus read went out without the entity, the
 // card must not read as scoped — that reading is the single piece of evidence a
@@ -183,20 +211,75 @@ check('the call that went out wide is named, since that is the actionable part',
 check('a mixed turn reads differently from a fully unscoped one',
   mixed.card?.text !== ignored.card?.text);
 
-// The other half of the same property: over-flagging teaches the wrong thing too.
+// ── 5. the other half of the property: over-flagging teaches a wrong thing too ──
+// A run whose retrieval WAS scoped, told by the only observable in the exercise
+// that it was not, is worse than no card: the participant has no way to tell the
+// card is wrong. Each of these three is a call the entity could never have
+// narrowed, and none of them may drag the verdict off green.
 const withOtherTools = await chatRun('First.Last@constellationdealer.com',
-  [mediaScoped, mediaByFileId, otherServer]);
+  [mediaScoped, mediaByFileId, mediaNonSearch, otherServer]);
 check('a call already pinned to one media file does not count as unscoped',
   withOtherTools.card?.state === 'done', withOtherTools.card?.state);
+check('a NON-SEARCH media tool does not count as an unscoped corpus read',
+  withOtherTools.card?.state === 'done' &&
+  !/list_media_entity_values[\s\S]*WITHOUT/.test(withOtherTools.card?.text || ''),
+  withOtherTools.card?.text?.slice(0, 260));
 check('a tool on another server does not count as an unscoped corpus read',
   (withOtherTools.card?.text || '').includes('1 of 1 corpus searches carried it'),
   withOtherTools.card?.text?.slice(0, 200));
 
-// No corpus read visible at all must not read as scoped either.
+// Each on its own too. In the combined fixture above these three share one
+// verdict, so any of them breaking fails all three assertions and none of them
+// is really pinned — the standalone runs are what hold each exclusion down.
+
+const nonSearchOnly = await chatRun('First.Last@constellationdealer.com', [mediaNonSearch]);
+check('a non-search media tool alone is not accused of going wide',
+  !accused(nonSearchOnly.card), `${nonSearchOnly.card?.state} — ${nonSearchOnly.card?.text?.slice(0, 160)}`);
+
+// Seen live on DEV: handed the file id by the loop, the agent skipped searching
+// entirely and read that one file. That is the TIGHTEST run the exercise can
+// produce, and an earlier version of this card painted it red.
+const byFileIdOnly = await chatRun('First.Last@constellationdealer.com', [mediaByFileId]);
+check('a call pinned to one media file alone is not accused of going wide',
+  !accused(byFileIdOnly.card), `${byFileIdOnly.card?.state} — ${byFileIdOnly.card?.text?.slice(0, 160)}`);
+check('a turn that read the document by id is GREEN, not "no scope applied"',
+  byFileIdOnly.card?.state === 'done' && /by id/i.test(byFileIdOnly.card?.text || ''),
+  `${byFileIdOnly.card?.state} — ${byFileIdOnly.card?.text?.slice(0, 200)}`);
+
+const withinOneFile = await chatRun('First.Last@constellationdealer.com',
+  [mediaScoped, mediaSearchWithinOneFile]);
+check('searching WITHIN one already-chosen document is not a corpus search',
+  withinOneFile.card?.state === 'done' &&
+  (withinOneFile.card?.text || '').includes('1 of 1 corpus searches carried it'),
+  `${withinOneFile.card?.state} — ${withinOneFile.card?.text?.slice(0, 200)}`);
+
+// ── 6. casing — TargetUMH matches entity type and id without regard to case ──
+// Measured on DEV: a file stored as Model/CaseProbe-MiXeD-0903 was found by all
+// six casings via GET /media/entity, and retrieved through vector_search_media
+// with the id lowercased and with the type lowercased. So a re-cased entity WAS
+// honoured, and calling it unscoped would be a red card on a correct run.
+const recased = await chatRun('First.Last@constellationdealer.com', [mediaScopedRecased]);
+check('an entity the agent re-cased still counts as carried, as UMH treats it',
+  recased.card?.state === 'done', `${recased.card?.state} — ${recased.card?.text?.slice(0, 200)}`);
+
+// The other direction: folding case must not fold two different people together.
+const someoneElse = await chatRun('First.Last@constellationdealer.com', [mediaSomeoneElse]);
+check('a different handle is still not a match',
+  someoneElse.card?.state === 'failed', someoneElse.card?.state);
+const mixedByCase = await chatRun('First.Last@constellationdealer.com',
+  [mediaScopedRecased, mediaSomeoneElse]);
+check('case folding does not hide a genuinely mixed turn',
+  mixedByCase.card?.state === 'failed' && /mixed/i.test(mixedByCase.card?.text || ''),
+  mixedByCase.card?.state);
+
+// Nothing retrieved at all is not a scope success either — the answer came from
+// somewhere other than these documents, which is worth a colour of its own.
 const nothingVisible = await chatRun('First.Last@constellationdealer.com', [otherServer]);
-check('a turn with no corpus search does not claim a scope',
-  nothingVisible.card?.state !== 'done' && /no search of the shared corpus/i.test(nothingVisible.card?.text || ''),
-  nothingVisible.card?.text?.slice(0, 160));
+check('a turn that retrieved nothing does not claim a scope',
+  nothingVisible.card?.state !== 'done' && /nothing was retrieved/i.test(nothingVisible.card?.text || ''),
+  `${nothingVisible.card?.state} — ${nothingVisible.card?.text?.slice(0, 160)}`);
+check('...and it is not accused of going wide either',
+  !accused(nothingVisible.card), nothingVisible.card?.text?.slice(0, 160));
 
 // No entity to ask for at all: the request must go out exactly as it always did.
 const bare = await chatRun('', [mediaScoped]);
