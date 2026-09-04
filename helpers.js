@@ -181,6 +181,7 @@ function renderConnection() {
   state.textContent = ready ? 'credentials loaded' : 'not configured';
   state.setAttribute('data-ok', String(ready));
 
+  const entityTag = participantEntityId();
   const rows = [
     ['Gateway', _hostOf(GATEWAY_URL), Boolean(GATEWAY_URL)],
     ['Media hub', _hostOf(UMH_URL), Boolean(UMH_URL)],
@@ -188,7 +189,11 @@ function renderConnection() {
     ['Dealer', DEALER_GUID, Boolean(DEALER_GUID)],
     ['Username', _config.username, Boolean(_config.username)],
     ['Password', _config.password ? '••••••• loaded' : '', Boolean(_config.password)],
-    ['Secret', _config.clientSecret ? '••••••• loaded' : '', Boolean(_config.clientSecret)]
+    ['Secret', _config.clientSecret ? '••••••• loaded' : '', Boolean(_config.clientSecret)],
+    // The tag your uploads carry and your questions ask for. Shown because it
+    // is derived rather than configured, and the same .env must always produce
+    // the same one — see participantEntityId().
+    ['Your tag', entityTag ? `${PARTICIPANT_ENTITY_TYPE} / ${entityTag}` : '', Boolean(entityTag)]
   ];
 
   const list = document.getElementById('connectionList');
@@ -258,6 +263,82 @@ async function authenticate() {
   return _authToken;
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  WHOSE DOCUMENT IS THIS? — the participant's entity tag
+//
+//  Every participant in this workshop signs in as the SAME dealer, so every
+//  upload lands in one corpus of a few thousand documents. An entity tag is
+//  how a document says which of us put it there: TargetUMH stores it in
+//  media_entities, and the retrieval tool can filter on it.
+//
+//  Two different things, and it matters which is which:
+//    - the UPLOAD side is ENFORCED. UMH records the tag, and rejects the
+//      request outright if entityType and entityId do not travel together.
+//    - the QUERY side is STEERED. The LLM agent chooses the tool arguments,
+//      so the tag influences retrieval; it does not guarantee it.
+//
+//  Neither side is a privacy control. The corpus stays shared — see
+//  "The PDF you bring" in the README.
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * The entity type every workshop upload is tagged with.
+ *
+ * 'Model' is what the platform already uses for this shape of tag — the OEM
+ * manual lookup filters vector_search_media with entityType='Model' — so the
+ * retrieval tool understands it without anything new being taught.
+ */
+const PARTICIPANT_ENTITY_TYPE = 'Model';
+
+/**
+ * The participant's own handle, derived from the IDMS username already in .env.
+ *
+ * No portal call and no extra credential: the username is the one thing in the
+ * config that is different for each of us, so it is what the handle is made of.
+ *
+ * It must be STABLE — the same .env must produce the same handle on every run,
+ * or a second run cannot find what the first one uploaded. That is why this is
+ * a pure function of the username with no clock, no randomness and no counter
+ * in it.
+ *
+ * The +tag some workshop accounts carry (first.last+perseus@…) is normalised,
+ * not stripped: two accounts differing only by their tag are different people,
+ * and dropping it would collide them. Two genuinely different addresses can
+ * still normalise to the same handle (first.last@a vs first_last@b); that
+ * costs a little retrieval precision and nothing else, which is the right
+ * trade for something with no lookup behind it.
+ *
+ * Lowercased here, in the one place the handle is made, so there is a single
+ * spelling of it in the whole exercise. TargetUMH matches entity ids without
+ * regard to case (measured on DEV, and it indexes on lower(entity_id)), so
+ * casing cannot break retrieval — but a handle that came out differently
+ * depending on how someone typed their username into .env would still be two
+ * handles to a human reading the card, and one of them would look wrong.
+ *
+ * Returns '' when there is no username to derive from — callers must then send
+ * NEITHER entity field, never one of them.
+ */
+function participantEntityId() {
+  const localPart = String(_config.username || '').trim().toLowerCase().split('@')[0];
+  return localPart
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
+}
+
+/**
+ * The entity pair to tag with and to ask for, or null when it cannot be derived.
+ *
+ * Returned as a pair on purpose: UMH returns 400 for entityType without
+ * entityId or the other way round, so there is no code path here that can
+ * produce half of one.
+ */
+function participantEntity() {
+  const entityId = participantEntityId();
+  if (!entityId) return null;
+  return { entityType: PARTICIPANT_ENTITY_TYPE, entityId };
+}
+
 /**
  * Upload a PDF file. Returns { id, ingestionStatus, ... }
  */
@@ -267,6 +348,14 @@ async function uploadPdf(file) {
   formData.append('allowUnassigned', 'true');
   formData.append('generateEmbedding', 'true');
   formData.append('description', 'Uploaded for RAG exercise');
+
+  // Tag the upload as this participant's. Both fields or neither: UMH rejects
+  // the request with a 400 when only one of the pair is present.
+  const entity = participantEntity();
+  if (entity) {
+    formData.append('entityType', entity.entityType);
+    formData.append('entityId', entity.entityId);
+  }
 
   const res = await fetch(`${UMH_URL}/api/v1/${getDealerGuid()}/media/upload`, {
     method: 'POST',
@@ -344,16 +433,18 @@ function explainIngestionStop(status) {
  * @param {function} onToolStart    - Called with (toolName, description) when a tool starts
  * @param {function} onToolComplete - Called with (toolName, success, summary) when a tool finishes
  * @param {function} onThinking     - Called with (message) when the LLM is thinking
+ * @param {object|null} [entity]    - Optional { entityType, entityId } to steer retrieval
+ *                                    towards. Defaults to this participant's own tag.
  * @returns {Promise<{message: string, toolCalls: Array}>} The final answer and tool call log
  */
-async function chatWithGateway(message, onToolStart, onToolComplete, onThinking) {
+async function chatWithGateway(message, onToolStart, onToolComplete, onThinking, entity = participantEntity()) {
   const res = await fetch(`${GATEWAY_URL}/api/chat/stream`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${getToken()}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ message })
+    body: JSON.stringify(_chatRequestBody(message, entity))
   });
 
   if (!res.ok) {
@@ -361,7 +452,338 @@ async function chatWithGateway(message, onToolStart, onToolComplete, onThinking)
     throw new Error(`Gateway request failed, so the agent could not plan tool calls or compose an answer.${text ? ' Details: ' + text : ` (${res.status} ${res.statusText})`}`);
   }
 
-  return _parseSseStream(res.body, onToolStart, onToolComplete, onThinking);
+  const result = await _parseSseStream(res.body, onToolStart, onToolComplete, onThinking);
+  _renderRetrievalScope(entity, result.agentToolCalls);
+  return result;
+}
+
+/**
+ * The body sent to /api/chat/stream.
+ *
+ * Without an entity this is the bare { message } it has always been. With one,
+ * the entity is asked for on two channels, because neither is a filter:
+ *
+ *   - a line appended to `message`, naming the tool arguments outright. This is
+ *     the one that actually moves the agent. `displayMessage` carries the
+ *     question as typed, so the session history the platform stores shows what
+ *     the participant asked, not the plumbing.
+ *   - `context.activeEntity`, which the Gateway renders into the system prompt
+ *     as "User is viewing: Model / ID: …". Weaker, and there for the same
+ *     reason a host app sends it: it is the structured way to say what the
+ *     user is looking at.
+ *
+ * Both are prompt text in the end. The agent may ignore either.
+ */
+function _chatRequestBody(message, entity) {
+  if (!entity) return { message };
+
+  const scopeLine =
+    `(Retrieval scope: search only the documents tagged entityType "${entity.entityType}" and ` +
+    `entityId "${entity.entityId}". Pass both of those to the media search tool.)`;
+
+  return {
+    message: `${message}\n\n${scopeLine}`,
+    displayMessage: message,
+    context: {
+      appId: 'workshop-1-ask-your-document',
+      appName: 'Ask Your Document',
+      appVersion: APP_VERSION,
+      dealer: { dealerGuid: getDealerGuid() },
+      activeEntity: {
+        type: entity.entityType,
+        id: entity.entityId,
+        summary: `The PDF this participant uploaded, tagged ${entity.entityType}/${entity.entityId}.`
+      }
+    }
+  };
+}
+
+/**
+ * Two entity values naming the same thing.
+ *
+ * Compared case-INSENSITIVELY because that is what TargetUMH does, measured on
+ * DEV rather than read off either side's source: a file stored as
+ * Model/CaseProbe-MiXeD-0903 was found by all six casings of type and id
+ * through `GET /media/entity/{type}/{id}`, and retrieved by the agent through
+ * vector_search_media whether the entity was spelled as stored, lowercased, or
+ * with the type lowercased. The database backs that up — media_entities carries
+ * a functional index on (dealer_guid, lower(entity_type), lower(entity_id)),
+ * and the corpus really does hold both `Inspection` (24 rows) and `inspection`
+ * (64), `WorkOrder` (1928) and `workOrder` (2).
+ *
+ * The agent writes these strings itself and re-cases them freely. Comparing
+ * with === would call a run unscoped that TargetUMH scoped perfectly well —
+ * a red card on a correct run, which is the one thing this card must not do.
+ */
+function _sameEntityValue(a, b) {
+  const left = String(a ?? '').trim().toLowerCase();
+  return left !== '' && left === String(b ?? '').trim().toLowerCase();
+}
+
+/**
+ * Did this call carry the entity we asked for?
+ */
+function _carriesEntity(call, entity) {
+  const args = (call && call.arguments) || {};
+  return _sameEntityValue(args.entityType, entity.entityType) &&
+         _sameEntityValue(args.entityId, entity.entityId);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  THE RULE THIS CARD JUDGES BY — written down once, here
+//
+//  Only calls RECOGNISED as retrieving document content count towards the
+//  verdict. Every other call — processing, vocabulary lookups, writes, and any
+//  tool this file has never heard of — is shown on the card and moves the
+//  verdict NOWHERE, in either direction.
+//
+//  It is a named set rather than a rule about argument shapes, and that is a
+//  deliberate reversal. Three rounds of shape rules each classified the call in
+//  front of them correctly and then mis-read the next real TargetUMH operation:
+//
+//    - list_media_entity_values({ entityType })        read as a corpus search
+//    - list_media_entity_values({ entityType, tags })  read as one again, once
+//                                                      entityType alone was excluded
+//    - generate_embeddings({ mediaFileIds: [...] })    read as a document read,
+//                                                      because the key differs from
+//                                                      mediaFileId by one letter
+//
+//  Argument names cannot tell you what a tool is FOR, and this tool surface
+//  changes without us. A name we do not know now lands in the neutral bucket,
+//  where the worst case is a card admitting it could not classify a call. A
+//  shape we guess wrong lands in green or red, where the worst case is a
+//  participant taught the opposite of the lesson. A list that fails safe beats
+//  a property that fails wrong.
+//
+//  Two roles, and the difference matters:
+//    corpus — returns document content chosen by MATCHING. The entity narrows
+//             which documents that is, so these are the calls being judged.
+//    pinned — returns content from documents the caller already NAMED. Narrower
+//             than the entity could make it; nothing left to narrow.
+//
+//  And everything else splits in TWO, because "we did not count it" hides two
+//  very different facts:
+//
+//    aside   — we know this tool, and we know it did not search the corpus.
+//              Processing, vocabulary lookups, writes, and anything the Gateway
+//              ran on another server, which cannot have read this dealer's
+//              media at all. These take nothing away from a green verdict.
+//    unknown — a tool name this page has never seen, running where the media
+//              tools run. We do NOT know it did not search wide. It removes the
+//              card's standing to say "EVERY corpus search carried your
+//              entity", because there is a call in the turn it cannot account
+//              for. Not evidence of a wide search; not evidence of a scoped
+//              one. Uncertainty, and the card says so instead of claiming.
+//
+//  serverName is a fact the Gateway supplies about where a call ran, not a
+//  guess about what it is for — which is why it can retire a call to `aside`.
+//  Absent or empty, it decides nothing and the call stays `unknown`.
+// ═══════════════════════════════════════════════════════════════
+// A lookup table keyed by a name the AGENT chose, so it must not answer for a
+// name it does not hold. An object literal inherits all twelve members of
+// Object.prototype, and `{...}['constructor']` is a truthy function — enough
+// for the role lookup below to return something that is none of the four
+// buckets, so the call falls out of every one of them and stops existing:
+// uncounted, unlisted, and NOT `unknown` either, which is the one that would
+// have qualified the verdict. A turn holding an unaccounted call then printed
+// the confident green. `constructor`, `toString`, `valueOf` and `__proto__`
+// are the obvious names; the list is twelve long and grows with the language.
+//
+// Guarded here rather than at each call site, because a guard at the call site
+// is a rule someone has to remember for the next table. With no prototype
+// there is nothing to inherit and plain indexing is safe by construction.
+const _nameKeyedTable = entries => Object.assign(Object.create(null), entries);
+
+const RETRIEVAL_TOOLS = _nameKeyedTable({
+  vector_search_media: 'corpus',
+  search_media: 'corpus',
+  get_media_for_entity: 'corpus',
+  get_document_chunks: 'pinned',
+  get_media_metadata: 'pinned'
+});
+
+// Known, and known not to be retrieval. Being ON this list is what lets a call
+// sit beside a green verdict without weakening it, so a name goes here only
+// when we can say what it does instead.
+const NON_RETRIEVAL_TOOLS = [
+  'generate_embeddings',      // processing
+  'list_media_entity_values', // reads the entity vocabulary, not documents
+  'update_media_entity',      // write
+  'upload_customer_document'  // write
+];
+
+const MEDIA_SERVER = 'media';
+
+/**
+ * What this call did for the answer: 'corpus', 'pinned', 'aside' (known, and
+ * known not to have searched), or 'unknown' (cannot be accounted for).
+ *
+ * A pinned tool that did not actually name a document does NOT fall through to
+ * `aside` — it becomes `unknown`, because a by-id read with no id is a call we
+ * cannot explain. The key is the exact `mediaFileId`, never a pattern, since
+ * `mediaFileIds` belongs to a tool that is not retrieval at all.
+ */
+function _retrievalRole(call) {
+  const toolName = String((call && call.toolName) || '');
+  const args = (call && call.arguments) || {};
+  // Exact buckets only. `if (role)` would pass anything truthy through as a
+  // role of its own, which is how an inherited property became a fifth bucket
+  // that no branch of the card reads.
+  const role = RETRIEVAL_TOOLS[toolName];
+
+  if (role === 'pinned') return String(args.mediaFileId ?? '').trim() ? 'pinned' : 'unknown';
+  if (role === 'corpus') return 'corpus';
+
+  if (NON_RETRIEVAL_TOOLS.includes(toolName)) return 'aside';
+
+  const server = String((call && call.serverName) || '').trim().toLowerCase();
+  if (server && server !== MEDIA_SERVER) return 'aside';
+
+  return 'unknown';
+}
+
+function _describeCall(call) {
+  return `${call.toolName}(${JSON.stringify(call.arguments, null, 2)})`;
+}
+
+/**
+ * Show what the agent ACTUALLY passed — the whole point of the exercise.
+ *
+ * The tool card rendered from the `tool_start` event cannot answer this: that
+ * event carries the tool's name and a "Executing …" description and no
+ * arguments at all. The arguments arrive once, at the end, on the `complete`
+ * event as response.toolCalls[].arguments. So this reads them there and puts
+ * them on the rail next to the tool call they belong to.
+ *
+ * A turn is not one search. The agent can run several, and it can carry the
+ * entity on some and not others — and a card that called that "scoped" would
+ * teach the exact opposite of the lesson it exists for, on the one piece of
+ * evidence a participant has. So a MIXED turn is its own verdict, it is not
+ * green, and it names the calls that went out wide, because those are the
+ * actionable part.
+ *
+ * Everything below — the status colour, the headline, the counts and the
+ * listing — is derived from ONE verdict. Deriving the colour in one place and
+ * the wording in another is how a card ends up saying "scoped" above a list of
+ * unscoped calls.
+ */
+function _renderRetrievalScope(entity, agentToolCalls) {
+  if (!entity) return;
+
+  const calls = Array.isArray(agentToolCalls) ? agentToolCalls : [];
+  const asked = `${entity.entityType} / ${entity.entityId}`;
+
+  // Sort once, by the rule above. Every call lands in exactly one of these four.
+  const searches = calls.filter(call => _retrievalRole(call) === 'corpus');
+  const named = calls.filter(call => _retrievalRole(call) === 'pinned');
+  const asides = calls.filter(call => _retrievalRole(call) === 'aside');
+  const unknown = calls.filter(call => _retrievalRole(call) === 'unknown');
+
+  const scoped = searches.filter(call => _carriesEntity(call, entity));
+  const wide = searches.filter(call => !_carriesEntity(call, entity));
+
+  const verdict =
+    searches.length > 0
+      ? (wide.length === 0 ? 'scoped' : scoped.length === 0 ? 'unscoped' : 'mixed')
+      : (named.length > 0 ? 'direct' : 'nothing');
+
+  // A call we cannot account for does not make the turn bad — it makes the
+  // card's claim smaller. "Every corpus search carried your entity" is a
+  // universal claim, and a turn holding retrieval this page cannot classify is
+  // one the card has no standing to make it about.
+  const uncertain = unknown.length > 0;
+
+  // Every universal claim on this card goes through here, and a branch cannot
+  // state the confident half without writing down what it degrades to.
+  //
+  // Making it smaller is not one edit. The headline, the body and the aside
+  // that explains the qualification are three separate sentences, and the
+  // first version of this reduced the headline while the body still said
+  // "nothing here read anybody else's documents" — a contradiction three lines
+  // apart on the same card, in the one place a participant looks for the
+  // truth. `degraded` records that a claim was actually withdrawn, so the
+  // explanation appears exactly where that happened rather than being asserted
+  // on every card whether or not anything was given up.
+  let degraded = false;
+  const claim = (confident, qualified) => {
+    if (!uncertain) return confident;
+    degraded = true;
+    return qualified;
+  };
+
+  const steeringNote =
+    `Your loop is fine — this is what "steered, not enforced" looks like. The entity is a ` +
+    `request to the agent, not a filter it has to obey.`;
+
+  // One count, read by every branch below, so the number can never disagree
+  // with the list of calls printed under it.
+  const counted = `${scoped.length} of ${searches.length} corpus searches`;
+  const wideList = `Went out WITHOUT your entity — these read the whole shared corpus:\n\n` +
+    wide.map(_describeCall).join('\n\n');
+
+  // 'note' is neither green nor red. A card that cannot tell says so; it does
+  // not guess, and an unrecognised tool never decides the lesson.
+  const parts = { headline: '', body: '', status: 'error' };
+
+  if (verdict === 'scoped') {
+    parts.status = uncertain ? 'note' : 'complete';
+    parts.headline = claim(
+      `Every corpus search carried your entity — ${counted}.`,
+      `The searches this page can account for carried your entity — ${counted}.`);
+    parts.body = scoped.map(_describeCall).join('\n\n');
+  } else if (verdict === 'mixed') {
+    parts.headline = `MIXED — only some of the retrieval was yours: ${counted} carried it.`;
+    parts.body = `${steeringNote}\n\n${wideList}\n\nCarried it:\n\n` +
+      scoped.map(_describeCall).join('\n\n');
+  } else if (verdict === 'unscoped') {
+    parts.headline = `The agent did NOT pass it — ${counted} carried it.`;
+    parts.body = `${steeringNote}\n\n${wideList}`;
+  } else if (verdict === 'direct') {
+    parts.status = uncertain ? 'note' : 'complete';
+    parts.headline = claim(
+      'No corpus search was needed — the agent read your document by id.',
+      'The reads this page can account for named your document by id — no corpus search among them.');
+    parts.body = claim(
+      `Naming the file is narrower than the entity could ever have made it, so nothing here ` +
+        `read anybody else's documents.`,
+      `Naming the file is narrower than the entity could ever have made it — but that is a ` +
+        `statement about the read below, not about the turn. Something else ran that this page ` +
+        `cannot account for, so whether anybody else's documents were read is not settled here.`) +
+      '\n\n' + named.map(_describeCall).join('\n\n');
+  } else {
+    parts.status = 'note';
+    // With no calls at all there is nothing to be unrecognised, so that arm
+    // cannot be reached while `uncertain` — it needs no qualified form.
+    parts.headline = calls.length
+      ? claim(
+          'No call this page recognises as retrieval ran, so there is nothing to judge.',
+          'No call this page recognises as retrieval ran — and one it does not recognise may ' +
+            'have, so this turn is not one the card can clear.')
+      : 'The agent made no tool calls at all this turn, so nothing was retrieved.';
+    parts.body = '';
+  }
+
+  // Shown in every verdict. Two sections, because they are two different facts:
+  // one is "we know this did not search", the other is "we cannot tell".
+  const asideList = asides.length
+    ? `\n\nNot counted either way — these are not document retrieval:\n\n` +
+      asides.map(_describeCall).join('\n\n')
+    : '';
+
+  const unknownList = unknown.length
+    ? `\n\nNOT RECOGNISED — this page cannot tell whether ` +
+      `${unknown.length === 1 ? 'this call read' : 'these calls read'} the corpus, so ` +
+      `${unknown.length === 1 ? 'it is' : 'they are'} neither counted nor ruled out.` +
+      // Only where a claim was actually given up. A MIXED or unscoped headline
+      // never asserted anything universal, so this call took nothing from it,
+      // and saying otherwise describes a headline that branch does not have.
+      `${degraded ? ' That is why the line above reports only what it can account for.' : ''}\n\n` +
+      unknown.map(_describeCall).join('\n\n')
+    : '';
+
+  const detail = [`Asked for: ${asked}`, parts.headline, '', parts.body].join('\n').trimEnd() +
+    asideList + unknownList;
+  addStep('scope', 'Retrieval scope', detail, parts.status, { nest: true });
 }
 
 /**
@@ -376,6 +798,10 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
   let eventType = null;
   let assistantTurnId = null;
   let sessionId = null;
+  // The agent's tool calls WITH their arguments. Only the `complete` event has
+  // them — `tool_start` carries a name and a description and nothing else — so
+  // there is no way to show what was passed until the turn is over.
+  let agentToolCalls = null;
 
   // Gateway events are not perfectly uniform. Normalize the common
   // shapes so the teaching app can focus on the loop, not event plumbing.
@@ -418,6 +844,7 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
         if (data && typeof data === 'object' && data.response) {
           assistantTurnId = data.response.assistantTurnId ?? assistantTurnId;
           sessionId = data.response.sessionId ?? sessionId;
+          if (Array.isArray(data.response.toolCalls)) agentToolCalls = data.response.toolCalls;
         }
         break;
     }
@@ -445,7 +872,9 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
   }
 
   _lastTurnId = assistantTurnId;
-  return { message: finalMessage, toolCalls, assistantTurnId, sessionId };
+  // `toolCalls` keeps its existing shape (one entry per tool_start, name only).
+  // `agentToolCalls` is additive and is the one that carries arguments.
+  return { message: finalMessage, toolCalls, agentToolCalls, assistantTurnId, sessionId };
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -459,12 +888,24 @@ async function _parseSseStream(body, onToolStart, onToolComplete, onThinking) {
 // ═══════════════════════════════════════════════════════════════
 
 // Statuses loop.js uses, mapped to the four visual states.
-const STEP_STATES = {
+//
+// `note` is the fifth, and it is deliberately not a fourth colour: it maps to
+// `idle`, which carries no colour and no pulse. It exists for a step that has
+// something to SAY and no verdict to give — the Retrieval scope card when the
+// agent ran nothing this page recognises as retrieval. Green would claim a
+// success and red would accuse a run that may well have been fine.
+// Same shape as RETRIEVAL_TOOLS. Every key reaching it is a literal this file
+// wrote, so it is not reachable the way that one was — but it is one caller
+// away from being, and `_visualState('constructor')` would return a function
+// where a CSS class belongs. Built the same way so the question does not have
+// to be re-asked each time a state is added.
+const STEP_STATES = _nameKeyedTable({
   thinking: 'running',
   waiting: 'running',
   complete: 'done',
-  error: 'failed'
-};
+  error: 'failed',
+  note: 'idle'
+});
 
 // _steps is keyed by a UNIQUE occurrence key and iterated in insertion order,
 // so every loop over it walks the trace chronologically. _byId maps the LOGICAL
@@ -675,7 +1116,11 @@ function _applyState(step, status) {
       step.startedAt = performance.now();
     }
     _startTicker();
-  } else if (state !== 'idle' && step.endedAt === null) {
+  } else if (step.endedAt === null) {
+    // Idle settles too. It used to be left ticking, which was harmless while
+    // nothing reached this branch with an idle state — but a `note` step is a
+    // finished step with no verdict, and a finished step that goes on counting
+    // reads as still running.
     step.endedAt = performance.now();
     step.durationEl.textContent = _formatSeconds(step.endedAt - step.startedAt);
   }
